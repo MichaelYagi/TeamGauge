@@ -22,6 +22,11 @@ export type TeamRecommendationsOutput = z.infer<typeof TeamRecommendationsOutput
 
 // Hand-written JSON Schema mirror of the above, for providers (Ollama) that
 // take a raw JSON Schema for structured output rather than a Zod schema.
+// additionalProperties: false is required on every object node here — the
+// Claude API's structured-output validator (output_config.format) rejects
+// any object schema that omits it, even though Ollama's structured output
+// doesn't enforce this. Omitting it on a nested object (not just the top
+// level) is enough to fail a Claude call with a 400.
 export const RECOMMENDATIONS_JSON_SCHEMA = {
   type: "object",
   properties: {
@@ -44,6 +49,7 @@ export const RECOMMENDATIONS_JSON_SCHEMA = {
           notes: { type: "string", description: "The full analysis and reasoning for this person, several sentences, grounded in the data — this is where explanations belong, not in the arrays above." },
         },
         required: ["name", "redistribute_to", "reduce_scope", "notes"],
+        additionalProperties: false,
       },
     },
     team_recommendations: {
@@ -58,7 +64,9 @@ export const RECOMMENDATIONS_JSON_SCHEMA = {
         notes: { type: "string", description: "The full team-wide analysis, several sentences, grounded in team_metrics and named cross-engineer comparisons — this is where explanations belong, not in the arrays above." },
       },
       required: ["redistribute_work", "sprint_feasibility", "notes"],
+      additionalProperties: false,
     },
   },
   required: ["engineer_recommendations", "team_recommendations"],
+  additionalProperties: false,
 } as const;

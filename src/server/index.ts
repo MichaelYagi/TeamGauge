@@ -1,3 +1,4 @@
+import "dotenv/config";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { readFile } from "node:fs/promises";
@@ -271,7 +272,7 @@ const ReasonRequestSchema = z.object({
   context: z.string().optional(),
 });
 
-function resolveReasoningProvider(opts: z.infer<typeof ReasonRequestSchema>): ReasoningProvider {
+function resolveReasoningProvider(opts: { provider: "ollama" | "claude"; url: string; model?: string }): ReasoningProvider {
   return opts.provider === "claude"
     ? new ClaudeReasoningProvider(opts.model || "claude-opus-5")
     : new OllamaReasoningProvider(opts.url, opts.model || "llama3.1");
@@ -377,10 +378,7 @@ app.post("/api/trend-reason", async (req, res) => {
     }));
     const trend = computeTrend(points);
 
-    const provider =
-      parsed.provider === "claude"
-        ? new ClaudeReasoningProvider(parsed.model || "claude-opus-5")
-        : new OllamaReasoningProvider(parsed.url, parsed.model || "llama3.1");
+    const provider = resolveReasoningProvider(parsed);
 
     const cumulative = await reasonAboutTrend(trend, provider, { freeText: parsed.context });
     res.json({ trend, cumulative });

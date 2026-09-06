@@ -19,13 +19,28 @@ export class ClaudeReasoningProvider implements ReasoningProvider {
   constructor(private readonly model: string = "claude-opus-5") {}
 
   // Generic structured-output call — see OllamaReasoningProvider.chat.
+  //
+  // max_tokens is generous (8192) because the prompt explicitly asks for
+  // multi-sentence, named, comparative analysis per engineer plus team-wide
+  // notes — a team with several engineers can genuinely produce more JSON
+  // output than a small budget allows. A cut-off response is stopped mid
+  // string, which JSON.parse reports as an opaque "Unterminated string"
+  // error with no indication that the real cause was a length limit — so
+  // stop_reason is checked first and turned into a clear, actionable error
+  // instead of letting that confusing parse failure surface to the caller.
   async chat(prompt: string, jsonSchema: Record<string, unknown>): Promise<unknown> {
     const response = await this.client.messages.create({
       model: this.model,
-      max_tokens: 4096,
+      max_tokens: 8192,
       messages: [{ role: "user", content: prompt }],
       output_config: { format: { type: "json_schema", schema: jsonSchema } },
     });
+
+    if (response.stop_reason === "max_tokens") {
+      throw new Error(
+        "ClaudeReasoningProvider: response was cut off before finishing (hit the max_tokens limit) — the reasoning output was too long to fit. Try a smaller team/sprint scope, or reduce how much detail the prompt asks for.",
+      );
+    }
 
     const textBlock = response.content.find((block): block is Anthropic.TextBlock => block.type === "text");
     if (!textBlock) throw new Error("ClaudeReasoningProvider: no text content in response");

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import "dotenv/config";
 import { readFile } from "node:fs/promises";
 import { Command } from "commander";
 import { JiraProvider } from "../providers/jira/JiraProvider.js";

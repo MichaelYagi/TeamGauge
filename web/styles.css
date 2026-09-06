@@ -362,6 +362,18 @@ button:hover {
   font-size: 0.85rem;
 }
 
+/* Actual reasoning-step output (engineer card notes, team recommendations) —
+   deliberately distinct from .notes-placeholder above: that class is for
+   genuine "nothing here yet" hints, and using its small italic muted styling
+   for real analysis made substantive content look like a de-emphasized
+   afterthought instead of the main thing the panel exists to show. */
+.reasoning-output {
+  color: var(--text);
+  font-style: normal;
+  font-size: 0.95rem;
+  line-height: 1.5;
+}
+
 .json-viewer-header {
   display: flex;
   justify-content: space-between;

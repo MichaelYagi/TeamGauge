@@ -31,6 +31,7 @@ export function buildTrendPrompt(trend: TeamTrend, ctx: ReasoningContext = {}): 
     ctx.freeText ? `Team-supplied context, treat as ground truth:\n${ctx.freeText}` : null,
 
     "concerning_trends must each cite the specific checkpoints/dates that show the pattern, not just assert it. recommendations must name specific people when the trend is about a person, and must be something only visible from the accumulated data (e.g. \"Y's cycle time has increased in each of the last 3 checkpoints — investigate now before it becomes the team norm\"), not a generic restatement of the summary.",
+    "Write in plain, clear sentences a busy manager could skim in seconds — one idea per sentence, citing the dates/checkpoints that prove the pattern, but not every number available at each of them. State the trend and what it means before the supporting evidence, not the other way around.",
 
     "Data:",
     JSON.stringify(trend, null, 2),

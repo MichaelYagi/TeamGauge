@@ -10,6 +10,9 @@ export const CumulativeReportOutputSchema = z.object({
 });
 export type CumulativeReportOutput = z.infer<typeof CumulativeReportOutputSchema>;
 
+// additionalProperties: false is required on every object node — see the
+// same note in schema.ts. This schema has only one object node (the top
+// level), but that one still needs it or a Claude call 400s.
 export const CUMULATIVE_JSON_SCHEMA = {
   type: "object",
   properties: {
@@ -29,4 +32,5 @@ export const CUMULATIVE_JSON_SCHEMA = {
     },
   },
   required: ["summary", "recommendations", "concerning_trends"],
+  additionalProperties: false,
 } as const;

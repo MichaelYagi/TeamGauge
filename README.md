@@ -24,7 +24,8 @@ A workload intelligence system. It ingests signals from Jira (and other sources)
 - Live model discovery (`GET /api/models` / `teamgauge models`) — pick from what's actually installed, never type a model name from memory.
 - Deterministic, code-enforced guardrail: the `Unassigned` bucket can never be named as a redistribution source or target, even if a model tries to sneak it into a sentence.
 - **Cumulative reasoning over a team's full trend** — a second, distinct reasoning pass that synthesizes patterns only visible across multiple sprints (a climb, a plateau, a correlation over time), never a rehash of the latest snapshot.
-- Model output renders as real formatted text in the UI (bold, lists, headings) instead of raw markdown syntax.
+- Prompts require plain, one-idea-per-sentence writing — comparative and specific, but never several statistics stacked into one dense clause.
+- Model output renders as real formatted text in the UI (bold, lists, headings) instead of raw markdown syntax, styled like actual content rather than a muted placeholder hint.
 
 ### Persistence
 - Local SQLite file, zero server process required (`./teamgauge.db` by default).
@@ -82,5 +83,7 @@ npm run server
 
 - `TEAMGAUGE_DB` (or `--db <path>`) — SQLite file location. Defaults to `./teamgauge.db`.
 - `ANTHROPIC_API_KEY` — required only when using `--provider claude`.
+
+Both the CLI and the server load a `.env` file automatically (`cp .env.example .env` to get started). `.env` is gitignored — never commit real keys.
 
 See `claude.md` and `design.md` for the full working specification and architecture.

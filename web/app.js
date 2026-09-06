@@ -195,7 +195,21 @@ document.getElementById("departed-table-wrap").addEventListener("click", async (
   }
 });
 
-setupTeamSelect.addEventListener("change", () => loadTeamProfile(setupTeamSelect.value));
+// Convenience only, never a redirect: picking a team in Team Setup pre-fills
+// "Use saved team" in the Input panel, but only while that selector is still
+// on its default — an explicit choice there is never overridden just because
+// you're browsing a different team's profile in Team Setup.
+function syncAnalyzeTeamSelection(teamName) {
+  if (teamName && !analyzeTeamSelect.value) {
+    analyzeTeamSelect.value = teamName;
+    updateAnalyzeTeamFields();
+  }
+}
+
+setupTeamSelect.addEventListener("change", () => {
+  loadTeamProfile(setupTeamSelect.value);
+  syncAnalyzeTeamSelection(setupTeamSelect.value);
+});
 
 document.getElementById("team-setup-form").addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -218,6 +232,7 @@ document.getElementById("team-setup-form").addEventListener("submit", async (eve
     setupStatusEl.textContent = `Saved "${setupTeamName.value}".`;
     await loadTeams();
     setupTeamSelect.value = setupTeamName.value;
+    syncAnalyzeTeamSelection(setupTeamName.value);
     await loadTeamProfile(setupTeamName.value);
   } catch (error) {
     setupStatusEl.textContent = error.message;
@@ -438,7 +453,7 @@ document.getElementById("cumulative-form").addEventListener("submit", async (eve
       <div class="cumulative-report">
         <div>
           <h4>Summary</h4>
-          <div>${formatMessage(cumulative.summary)}</div>
+          <div class="reasoning-output">${formatMessage(cumulative.summary)}</div>
         </div>
         <div>
           <h4>Recommendations</h4>
@@ -635,7 +650,7 @@ function renderTeam(report, teamIndex) {
           </label>
           <button type="button" class="save-card-btn" data-team-index="${teamIndex}" data-engineer-index="${engineerIndex}">Save Role/Weight/Notes to Roster</button>
           <p class="card-save-status" data-team-index="${teamIndex}" data-engineer-index="${engineerIndex}"></p>
-          <div class="notes-placeholder">${engineer.recommendations.notes ? formatMessage(notes) : escapeHtml(notes)}</div>
+          <div class="${engineer.recommendations.notes ? "reasoning-output" : "notes-placeholder"}">${engineer.recommendations.notes ? formatMessage(notes) : escapeHtml(notes)}</div>
         </article>
       `;
     })
@@ -653,7 +668,7 @@ function renderTeam(report, teamIndex) {
           ? `<p><strong>Redistribute work from:</strong> ${tr.redistribute_work.map((name) => `<span class="recommendation-badge">${escapeHtml(name)}</span>`).join(" ")}</p>`
           : ""
       }
-      ${tr.notes ? `<div class="notes-placeholder">${formatMessage(tr.notes)}</div>` : ""}
+      ${tr.notes ? `<div class="reasoning-output">${formatMessage(tr.notes)}</div>` : ""}
     `
     : `
       <h2>Team recommendations</h2>
@@ -695,8 +710,8 @@ reasonForm.addEventListener("submit", async (event) => {
       body: JSON.stringify({
         payload: currentPayload,
         provider: reasonProvider.value,
-        url: document.getElementById("reasonUrl").value,
-        model: document.getElementById("reasonModel").value || undefined,
+        url: reasonUrlInput.value,
+        model: reasonModelSelect.value || undefined,
         context: document.getElementById("reasonContext").value || undefined,
       }),
     });
