@@ -1,0 +1,33 @@
+{
+  "name": "teamgauge",
+  "version": "0.1.0",
+  "description": "Workload intelligence system: ingests signals from Jira and other sources into a normalized JSON payload for LLM reasoning.",
+  "type": "module",
+  "bin": {
+    "teamgauge": "./dist/cli/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/cli/index.ts",
+    "start": "node dist/cli/index.js",
+    "server": "tsx src/server/index.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.124.0",
+    "better-sqlite3": "^13.0.3",
+    "commander": "^12.1.0",
+    "csv-parse": "^7.0.2",
+    "express": "^5.2.1",
+    "multer": "^2.3.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/express": "^5.0.6",
+    "@types/multer": "^2.2.0",
+    "@types/node": "^22.9.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3"
+  }
+}

@@ -1,0 +1,410 @@
+:root {
+  color-scheme: light dark;
+  --bg: #f7f7f8;
+  --panel: #ffffff;
+  --border: #ddd;
+  --text: #1a1a1a;
+  --muted: #666;
+  --accent: #2563eb;
+  --risk-low: #16a34a;
+  --risk-medium: #d97706;
+  --risk-high: #dc2626;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14161a;
+    --panel: #1e2126;
+    --border: #333;
+    --text: #eee;
+    --muted: #aaa;
+  }
+}
+
+* { box-sizing: border-box; }
+
+/* Author CSS always beats the browser's built-in [hidden]{display:none}
+   rule, regardless of specificity, since it's a different (lower-priority)
+   cascade origin — any element toggled via el.hidden that also has its own
+   `display` rule (labels, flex containers, etc.) would otherwise stay
+   visible despite the hidden attribute. This makes `hidden` always win. */
+[hidden] { display: none !important; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, sans-serif;
+}
+
+header {
+  padding: 1.5rem 2rem 0.5rem;
+}
+
+header p {
+  color: var(--muted);
+  margin-top: 0.25rem;
+}
+
+main {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 1rem 2rem 3rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1.25rem 1.5rem;
+}
+
+form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+input, select, textarea {
+  padding: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 0.95rem;
+  font-family: inherit;
+}
+
+.checkbox-label {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--text);
+}
+
+#team-meta-fields,
+#reason-fields,
+#history-controls,
+#cumulative-fields {
+  display: flex;
+  gap: 1rem;
+}
+
+#team-meta-fields label,
+#reason-fields label,
+#history-controls label,
+#cumulative-fields label {
+  flex: 1;
+}
+
+#reason-form,
+#cumulative-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+#reason-status.error,
+#history-status.error,
+#cumulative-status.error {
+  color: var(--risk-high);
+}
+
+#card-save-status {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+#card-save-status.error {
+  color: var(--risk-high);
+}
+
+.model-field-row {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.model-field-row select {
+  flex: 1;
+}
+
+.model-field-row button {
+  padding: 0.5rem 0.75rem;
+}
+
+#team-setup-form,
+#roster-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+#setup-meta-fields,
+#roster-fields {
+  display: flex;
+  gap: 1rem;
+}
+
+#setup-meta-fields label,
+#roster-fields label {
+  flex: 1;
+}
+
+#setup-status.error,
+#roster-status.error {
+  color: var(--risk-high);
+}
+
+#roster-table-wrap {
+  margin: 1rem 0;
+}
+
+.warning-box {
+  margin-top: 0.75rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--risk-medium);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--risk-medium) 12%, transparent);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  align-items: flex-start;
+}
+
+.roster-unconfigured td {
+  color: var(--muted);
+  font-style: italic;
+}
+
+button {
+  align-self: flex-start;
+  padding: 0.5rem 1.25rem;
+  border: none;
+  border-radius: 6px;
+  background: var(--accent);
+  color: white;
+  font-size: 0.95rem;
+  cursor: pointer;
+}
+
+button:hover {
+  opacity: 0.9;
+}
+
+#status {
+  min-height: 1.2em;
+  color: var(--muted);
+}
+
+#status.error {
+  color: var(--risk-high);
+}
+
+#team-selector-wrap {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.team-meta-row {
+  display: flex;
+  gap: 2rem;
+  color: var(--muted);
+}
+
+.metrics-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+  overflow-x: auto;
+  display: block;
+}
+
+.metrics-table th,
+.metrics-table td {
+  text-align: left;
+  padding: 0.4rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.metrics-table th {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.team-totals-row {
+  display: flex;
+  gap: 1.5rem;
+  margin-bottom: 0.75rem;
+  font-size: 0.9rem;
+}
+
+.team-totals-row strong {
+  display: block;
+  font-size: 1.1rem;
+}
+
+.cards-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 1rem;
+}
+
+.engineer-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1rem;
+}
+
+.engineer-card h3 {
+  margin: 0 0 0.25rem;
+}
+
+.role-input {
+  display: block;
+  width: 100%;
+  font-size: 0.75rem;
+  color: var(--muted);
+  margin-bottom: 0.5rem;
+  border: 1px solid transparent;
+  background: transparent;
+  padding: 0.15rem 0.3rem;
+  border-radius: 4px;
+}
+
+.role-input:hover,
+.role-input:focus {
+  border-color: var(--border);
+  background: var(--bg);
+  color: var(--text);
+}
+
+.weight-field,
+.card-field {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+
+.card-field .notes-input {
+  flex: 1;
+}
+
+.save-card-btn {
+  width: 100%;
+  margin-top: 0.5rem;
+  font-size: 0.85rem;
+  padding: 0.4rem 0.75rem;
+}
+
+.card-save-status {
+  min-height: 1.2em;
+  font-size: 0.8rem;
+  color: var(--muted);
+  margin: 0.35rem 0 0;
+}
+
+.card-save-status.error {
+  color: var(--risk-high);
+}
+
+.weight-input {
+  width: 4rem;
+  padding: 0.15rem 0.3rem;
+  font-size: 0.8rem;
+}
+
+.signals-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.25rem 1rem;
+  font-size: 0.85rem;
+  margin-bottom: 0.5rem;
+}
+
+.signals-grid dt {
+  color: var(--muted);
+}
+
+.signals-grid dd {
+  margin: 0;
+  font-weight: 600;
+}
+
+.burnout-badge {
+  display: inline-block;
+  padding: 0.15rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  color: white;
+}
+
+.burnout-low { background: var(--risk-low); }
+.burnout-medium { background: var(--risk-medium); }
+.burnout-high { background: var(--risk-high); }
+
+.notes-placeholder {
+  color: var(--muted);
+  font-style: italic;
+  font-size: 0.85rem;
+}
+
+.json-viewer-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+#json-output {
+  max-height: 400px;
+  overflow: auto;
+  background: var(--bg);
+  padding: 1rem;
+  border-radius: 6px;
+  font-size: 0.8rem;
+}
+
+.delta-good { color: var(--risk-low); }
+.delta-bad { color: var(--risk-high); }
+.delta-flat { color: var(--muted); }
+
+.recommendation-badge {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  background: var(--accent);
+  color: white;
+}
+
+.cumulative-report {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.cumulative-report ul {
+  margin: 0.25rem 0 0;
+  padding-left: 1.25rem;
+}
+
+.cumulative-report li {
+  margin-bottom: 0.4rem;
+}
+
+.concerning-trends li {
+  color: var(--risk-medium);
+}
