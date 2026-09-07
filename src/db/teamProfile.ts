@@ -1,4 +1,6 @@
 import { getDb } from "./connection.js";
+import type { TeamReport } from "../schema/canonical.js";
+import type { TeamTrend } from "../normalization/trend.js";
 
 export interface TeamProfile {
   name: string;
@@ -100,4 +102,41 @@ export function getRosterAsOf(teamName: string, asOfDate: string, dbPath?: strin
 // reactivated deliberately.
 export function getDepartedAsOf(teamName: string, asOfDate: string, dbPath?: string): RosterEntryRow[] {
   return latestEntriesAsOf(teamName, asOfDate, dbPath).filter((row) => Boolean(row.departed));
+}
+
+// report_json.engineers[].role (and per-point role in a TeamTrend) is frozen
+// the moment a snapshot is analyzed. If a roster role is added or corrected
+// afterward — including a backdated entry meant to apply retroactively — an
+// already-saved snapshot's embedded role stays stale forever unless that
+// exact snapshot is re-analyzed. Every read path that shows role for
+// display/context (history, trend, and reasoning prompts, in both the
+// server and the CLI) shows the current best-known role as of that point's
+// own date instead, falling back to the frozen value only when no roster
+// entry covers that date at all — so a name never goes from showing
+// something to showing nothing.
+export function currentRoleAsOf(teamName: string, engineerName: string, asOfDate: string, fallback: string, dbPath?: string): string {
+  const row = getRosterAsOf(teamName, asOfDate, dbPath).find((r) => r.engineer_name === engineerName);
+  return row?.role || fallback;
+}
+
+export function overlayCurrentRoles(teamName: string, trend: TeamTrend, dbPath?: string): TeamTrend {
+  return {
+    ...trend,
+    engineers: trend.engineers.map((e) => ({
+      ...e,
+      points: e.points.map((p) => ({ ...p, role: currentRoleAsOf(teamName, e.name, p.snapshot_date, p.role, dbPath) })),
+    })),
+  };
+}
+
+// Same overlay, but for a single full TeamReport rather than a trend — used
+// right before handing a saved snapshot's report to reasonAboutReport, so
+// the model sees each person's actual discipline (e.g. QA vs. software
+// engineer) instead of an empty role frozen in from before the roster was
+// filled out.
+export function overlayCurrentRolesOnReport(teamName: string, asOfDate: string, report: TeamReport, dbPath?: string): TeamReport {
+  return {
+    ...report,
+    engineers: report.engineers.map((e) => ({ ...e, role: currentRoleAsOf(teamName, e.name, asOfDate, e.role, dbPath) })),
+  };
 }

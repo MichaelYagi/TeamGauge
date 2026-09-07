@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import { Command } from "commander";
 import { JiraProvider } from "../providers/jira/JiraProvider.js";
 import { CSVProvider } from "../providers/csv/CSVProvider.js";
+import type { ProviderResult } from "../providers/types.js";
 import { MultiTeamConfigSchema } from "../schema/config.js";
 import { ReportsPayloadSchema, TeamReportSchema, type TeamReport } from "../schema/canonical.js";
 import type { Roster } from "../schema/roster.js";
@@ -12,14 +13,29 @@ import { gatherProviderResults } from "../normalization/gatherSources.js";
 import { loadRoster, resolveRosterEntry } from "../normalization/roster.js";
 import { computeTrend } from "../normalization/trend.js";
 import { reasonAboutReport } from "../reasoning/reason.js";
-import { reasonAboutTrend } from "../reasoning/cumulativeReason.js";
+import { reasonAboutTrend, reasonAboutPersonTrend } from "../reasoning/cumulativeReason.js";
 import { OllamaReasoningProvider } from "../reasoning/providers/ollama.js";
 import { ClaudeReasoningProvider } from "../reasoning/providers/claude.js";
 import type { ReasoningContext, ReasoningProvider } from "../reasoning/types.js";
 import { listOllamaModels, listClaudeModels } from "../reasoning/listModels.js";
 import { runSetup } from "./setup.js";
-import { createOrUpdateTeam, getTeam, listTeams, addRosterEntry, getRosterAsOf, getDepartedAsOf, markDeparted } from "../db/teamProfile.js";
-import { saveSnapshot, listSnapshots, getLatestSnapshot, updateSnapshotReport, findSnapshotByDate, listKnownEngineers } from "../db/snapshots.js";
+import { createOrUpdateTeam, getTeam, listTeams, addRosterEntry, getRosterAsOf, getDepartedAsOf, markDeparted, overlayCurrentRoles, overlayCurrentRolesOnReport } from "../db/teamProfile.js";
+import {
+  saveSnapshot,
+  listSnapshots,
+  getLatestSnapshot,
+  updateSnapshotReport,
+  updateSnapshotContext,
+  findSnapshotByDate,
+  findByteIdenticalSnapshot,
+  deleteSnapshot,
+  findSimilarSprint,
+  findSimilarSprintOnDate,
+  renameSprintLabel,
+  listKnownEngineers,
+  setEngineerSnapshotContext,
+  getEngineerSnapshotContext,
+} from "../db/snapshots.js";
 import { localToday } from "../util/date.js";
 
 const program = new Command();
@@ -69,6 +85,8 @@ program
   .option("--team <name>", "use a saved team profile (roster + sprint length) instead of --roster, and save this run as a dated snapshot")
   .option("--date <date>", "snapshot date (YYYY-MM-DD, default: today) — only used with --team")
   .option("--sprint-start <date>", "sprint start date (YYYY-MM-DD) — only used with --team; enables sprint-position awareness in `reason`")
+  .option("--sprint-goal <text>", "what this sprint was supposed to deliver — only used with --team; lets `reason` assess actual-vs-committed, not just raw throughput")
+  .option("--blocked-by <text>", "cross-team dependency blocking this sprint (e.g. \"Platform team's API migration\") — only used with --team")
   .option("--force", "save anyway when a snapshot already exists for this exact team+sprint+date (default: refuse, since that's almost always an accidental re-import)")
   .option("--db <path>", "database file path (default: ./teamgauge.db or TEAMGAUGE_DB)")
   .action(async (opts) => {
@@ -92,11 +110,23 @@ program
       }
 
       if (opts.input) {
-        const providerResult = opts.input.endsWith(".csv")
+        const isCsvInput = opts.input.endsWith(".csv");
+        const providerResult = isCsvInput
           ? await new CSVProvider().ingest(opts.input)
           : await new JiraProvider().ingest(
               opts.input.startsWith("http") ? { url: opts.input } : { json: opts.input },
             );
+
+        // "issues don't all agree" is only literally true for CSV, where
+        // sprint detection is actually attempted (from the Sprint column).
+        // For JSON/URL sources it's never attempted at all — Jira's sprint
+        // field is a custom field whose ID varies per instance, so guessing
+        // it would mean hardcoding a Jira field (see claude.md) — so the
+        // failure message below says that instead of implying disagreement
+        // that was never checked.
+        const sprintRequiredMessage = isCsvInput
+          ? "--sprint is required, and it couldn't be auto-detected — this source's issues don't all agree on one sprint (not every team's data is consistent enough to derive it; pass --sprint explicitly)"
+          : "--sprint is required — it can't be auto-detected from this source. Jira's sprint field lives in a custom field whose ID varies per Jira instance, so TeamGauge never guesses it for JSON/URL sources (only a CSV export's \"Sprint\" column is stable enough to auto-detect from). Pass --sprint explicitly — this is expected even if your query/export is already scoped to one sprint.";
 
         const detected = providerResult.detected ?? {};
         if (!opts.team && !opts.teamName && detected.team) {
@@ -106,35 +136,161 @@ program
           process.stderr.write(`teamgauge: detected sprint "${detected.sprint}" from the source (every issue agreed) — pass --sprint to override\n`);
         }
 
+        // A CSV export that genuinely spans several sprints (a backlog/board
+        // export, not a "this sprint only" export) is real, useful data —
+        // not an error to reject. When no single sprint was explicitly
+        // given or unanimously detected, split the file into one group per
+        // sprint actually present (see CSVProvider.ingestGroupedBySprint)
+        // and produce one report per sprint, instead of forcing the caller
+        // to either lose data or mislabel it under one guessed sprint.
+        async function resolveSprintGroups(): Promise<Array<{ sprint: string; result: ProviderResult; derivedDate: string | null }>> {
+          const sprint = opts.sprint || detected.sprint;
+          if (sprint) return [{ sprint, result: providerResult, derivedDate: null }];
+          if (!isCsvInput) fail(sprintRequiredMessage);
+
+          const { groups, skippedNoSprint } = await new CSVProvider().ingestGroupedBySprint(opts.input);
+          if (groups.length === 0) fail(sprintRequiredMessage);
+          if (skippedNoSprint > 0) {
+            process.stderr.write(
+              `teamgauge: skipped ${skippedNoSprint} issue(s) with no sprint value at all — not attributable to any sprint\n`,
+            );
+          }
+          process.stderr.write(
+            `teamgauge: source spans ${groups.length} sprints, not one — splitting into a separate report per sprint: ${groups
+              .map((g) => `"${g.sprint}" (${g.issueCount} issue${g.issueCount === 1 ? "" : "s"})`)
+              .join(", ")}\n`,
+          );
+          return groups;
+        }
+
         if (opts.team) {
           if (!getTeam(opts.team, opts.db)) {
             fail(`no team named "${opts.team}" — run \`teamgauge setup\` or \`teamgauge team create --team "${opts.team}"\` first`);
           }
-          const sprint = opts.sprint || detected.sprint;
-          if (!sprint) {
-            fail(
-              "--sprint is required when using --team, and it couldn't be auto-detected — this source's issues don't all agree on one sprint (not every team's data is consistent enough to derive it; pass --sprint explicitly)",
+          // Applies every collision/duplicate guard exactly as before for a
+          // single sprint. Never calls fail() itself — the single-sprint
+          // call site below fails fast on a skip (unchanged, documented
+          // "scripted/batch usage should not silently skip an intended
+          // save" behavior); the multi-sprint-group call site instead warns
+          // and continues, since a bulk historical import capturing 5 of 6
+          // sprints is far more useful than aborting the whole run over one
+          // collision. Roster resolution moved inside (parameterized by
+          // `date`, not a single outer constant) because a multi-sprint
+          // group's date is no longer necessarily "today" for every group —
+          // see resolveDateForGroup below.
+          function attemptSave(sprint: string, result: ProviderResult, date: string): { report: TeamReport; saved: boolean; skipReason?: string } {
+            const rosterRows = getRosterAsOf(opts.team, date, opts.db);
+            const roster: Roster = Object.fromEntries(
+              rosterRows.map((row) => [row.engineer_name, { role: row.role, weight: row.weight ?? undefined, notes: row.notes ?? undefined }]),
+            );
+            const similarSprint = findSimilarSprint(opts.team, sprint, opts.db);
+            if (similarSprint) {
+              process.stderr.write(
+                `teamgauge: sprint "${sprint}" looks similar to an existing sprint on record for "${opts.team}": "${similarSprint}" — if these are the same sprint, re-run with --sprint "${similarSprint}" instead, or history will fragment across two labels for it.\n`,
+              );
+            }
+
+            const existing = findSnapshotByDate(opts.team, sprint, date, opts.db);
+            if (existing && !opts.force) {
+              return {
+                report: buildTeamReport({ name: opts.team, sprint }, [result], roster),
+                saved: false,
+                skipReason: `a snapshot for team "${opts.team}" sprint "${sprint}" on ${date} already exists (id ${existing.id}, saved ${existing.created_at}) — this is almost always an accidental re-import. Pass --force to save another anyway, or use a different --date if this is a deliberate same-day re-check.`,
+              };
+            }
+
+            // Same date, different-but-similar sprint label — a much
+            // stronger "this is the same sprint" signal than
+            // label-similarity alone, so it gets the same explicit --force
+            // requirement as an exact collision, not just the advisory
+            // stderr notice above.
+            if (!existing) {
+              const sameDateSimilar = findSimilarSprintOnDate(opts.team, date, sprint, opts.db);
+              if (sameDateSimilar && !opts.force) {
+                return {
+                  report: buildTeamReport({ name: opts.team, sprint }, [result], roster),
+                  saved: false,
+                  skipReason: `"${opts.team}" already has a snapshot on ${date} under a different sprint label: "${sameDateSimilar.sprint}" (id ${sameDateSimilar.id}) — this is very likely the same sprint typed/detected differently. Re-run with --sprint "${sameDateSimilar.sprint}" instead if so, or pass --force only if "${sprint}" is genuinely a different sprint.`,
+                };
+              }
+            }
+
+            const report = buildTeamReport({ name: opts.team, sprint }, [result], roster);
+
+            // --force overrides the "same team+sprint+date" ambiguity check
+            // above, but never this one: if the new report is byte-identical
+            // to what's already saved, there is zero new information in it,
+            // and saving it anyway only pollutes `trend`'s deltas with a
+            // meaningless zero-change row. No flag bypasses this — a genuine
+            // re-check always produces at least some different signal.
+            if (existing && JSON.stringify(report) === existing.report_json) {
+              return {
+                report,
+                saved: false,
+                skipReason: `this would be an exact duplicate of snapshot id ${existing.id} (saved ${existing.created_at}) — the data hasn't changed since then, so nothing new was saved.`,
+              };
+            }
+
+            // Not a same-date collision, but a byte-identical report
+            // already on file for this team+sprint from an earlier date is
+            // the same "accidental re-import" smell across a day boundary —
+            // a normal collision (--force overrides it), not the hard
+            // same-date rule above.
+            if (!existing) {
+              const byteIdentical = findByteIdenticalSnapshot(opts.team, sprint, JSON.stringify(report), opts.db);
+              if (byteIdentical && !opts.force) {
+                return {
+                  report,
+                  saved: false,
+                  skipReason: `this would be byte-identical to snapshot id ${byteIdentical.id} for "${opts.team}" / "${sprint}" from ${byteIdentical.snapshot_date} (saved ${byteIdentical.created_at}) — nothing has changed since then. Pass --force if you deliberately want "still unchanged" recorded as of today.`,
+                };
+              }
+            }
+
+            saveSnapshot(
+              {
+                team_name: opts.team,
+                sprint,
+                snapshot_date: date,
+                sprint_start_date: opts.sprintStart,
+                sprint_goal: opts.sprintGoal,
+                blocked_by: opts.blockedBy,
+                report,
+              },
+              opts.db,
+            );
+            return { report, saved: true };
+          }
+
+          const explicitSprint = opts.sprint || detected.sprint;
+          if (explicitSprint) {
+            const date = opts.date || todayIso();
+            const result = attemptSave(explicitSprint, providerResult, date);
+            if (!result.saved) fail(result.skipReason!);
+            return printJson(ReportsPayloadSchema.parse(buildReportsPayload([result.report])));
+          }
+
+          // --date, when given, still applies uniformly to every group (an
+          // explicit choice always wins, unchanged). Left unspecified, each
+          // group defaults to ITS OWN latest-activity date instead of
+          // "today" for all of them — today is meaningless for several
+          // already-closed historical sprints imported in one batch (they'd
+          // all collide on one arbitrary date); each sprint's own last
+          // Resolved/Created date is real and lets history/trend place them
+          // correctly instead of stacking them on the import day.
+          const groups = await resolveSprintGroups();
+          const reports: TeamReport[] = [];
+          for (const group of groups) {
+            const date = opts.date || group.derivedDate || todayIso();
+            const result = attemptSave(group.sprint, group.result, date);
+            reports.push(result.report);
+            process.stderr.write(
+              result.saved
+                ? `teamgauge: saved snapshot for "${opts.team}" / "${group.sprint}" on ${date}\n`
+                : `teamgauge: skipped "${group.sprint}" — ${result.skipReason}\n`,
             );
           }
-          const date = opts.date || todayIso();
-
-          const existing = findSnapshotByDate(opts.team, sprint, date, opts.db);
-          if (existing && !opts.force) {
-            fail(
-              `a snapshot for team "${opts.team}" sprint "${sprint}" on ${date} already exists (id ${existing.id}, saved ${existing.created_at}) — this is almost always an accidental re-import. Pass --force to save another anyway, or use a different --date if this is a deliberate same-day re-check.`,
-            );
-          }
-
-          const rosterRows = getRosterAsOf(opts.team, date, opts.db);
-          const roster: Roster = Object.fromEntries(
-            rosterRows.map((row) => [row.engineer_name, { role: row.role, weight: row.weight ?? undefined, notes: row.notes ?? undefined }]),
-          );
-          const report = buildTeamReport({ name: opts.team, sprint }, [providerResult], roster);
-          saveSnapshot(
-            { team_name: opts.team, sprint, snapshot_date: date, sprint_start_date: opts.sprintStart, report },
-            opts.db,
-          );
-          return printJson(ReportsPayloadSchema.parse(buildReportsPayload([report])));
+          return printJson(ReportsPayloadSchema.parse(buildReportsPayload(reports)));
         }
 
         const teamName = opts.teamName || detected.team;
@@ -143,16 +299,11 @@ program
             "--team-name is required, and it couldn't be auto-detected — this source's issues don't all agree on one project (not every team's data is consistent enough to derive it; pass --team-name explicitly)",
           );
         }
-        const sprint = opts.sprint || detected.sprint;
-        if (!sprint) {
-          fail(
-            "--sprint is required, and it couldn't be auto-detected — this source's issues don't all agree on one sprint (not every team's data is consistent enough to derive it; pass --sprint explicitly)",
-          );
-        }
 
         const roster = opts.roster ? await loadRoster(opts.roster) : undefined;
-        const report = buildTeamReport({ name: teamName, sprint }, [providerResult], roster);
-        return printJson(ReportsPayloadSchema.parse(buildReportsPayload([report])));
+        const groups = await resolveSprintGroups();
+        const reports = groups.map((g) => buildTeamReport({ name: teamName, sprint: g.sprint }, [g.result], roster));
+        return printJson(ReportsPayloadSchema.parse(buildReportsPayload(reports)));
       }
 
       fail("one of --input or --config is required");
@@ -190,14 +341,9 @@ program
       if (opts.team) {
         if (!opts.sprint) fail("--sprint is required when using --team");
 
-        const snapshot = opts.snapshotDate
-          ? listSnapshots(opts.team, opts.sprint, opts.db).find((row) => row.snapshot_date === opts.snapshotDate)
-          : getLatestSnapshot(opts.team, opts.sprint, opts.db);
-        if (!snapshot) {
-          fail(`no snapshot found for team "${opts.team}" sprint "${opts.sprint}"${opts.snapshotDate ? ` on ${opts.snapshotDate}` : ""}`);
-        }
+        const snapshot = resolveSnapshotOrFail(opts.team, opts.sprint, opts.snapshotDate, opts.db);
 
-        const report = TeamReportSchema.parse(JSON.parse(snapshot.report_json));
+        const report = overlayCurrentRolesOnReport(opts.team, snapshot.snapshot_date, TeamReportSchema.parse(JSON.parse(snapshot.report_json)), opts.db);
         const profile = getTeam(opts.team, opts.db);
         const rosterRows = getRosterAsOf(opts.team, snapshot.snapshot_date, opts.db);
         const engineerNotes = Object.fromEntries(
@@ -212,12 +358,20 @@ program
             )
           : undefined;
 
+        const engineerSnapshotContext = getEngineerSnapshotContext(snapshot.id, opts.db);
+        const engineerContext = Object.fromEntries(
+          Object.entries(engineerSnapshotContext).map(([name, ctx]) => [name, { ptoDays: ctx.pto_days, onCall: ctx.on_call }]),
+        );
+
         const ctx: ReasoningContext = {
           freeText: opts.context,
           charter: profile?.charter ?? undefined,
           sprintLengthDays: profile?.sprint_length_days ?? undefined,
           daysIntoSprint,
           engineerNotes,
+          sprintGoal: snapshot.sprint_goal ?? undefined,
+          blockedBy: snapshot.blocked_by ?? undefined,
+          engineerContext,
         };
 
         const updatedReport = await reasonAboutReport(report, provider, ctx);
@@ -363,6 +517,85 @@ teamCmd
     printJson({ ok: true, team: opts.team });
   });
 
+const snapshotCmd = program.command("snapshot").description("Attach per-sprint facts to an already-saved snapshot");
+
+function resolveSnapshotOrFail(team: string, sprint: string, snapshotDate: string | undefined, dbPath?: string) {
+  const snapshot = snapshotDate
+    ? listSnapshots(team, sprint, dbPath).find((row) => row.snapshot_date === snapshotDate)
+    : getLatestSnapshot(team, sprint, dbPath);
+  if (!snapshot) {
+    fail(`no snapshot found for team "${team}" sprint "${sprint}"${snapshotDate ? ` on ${snapshotDate}` : ""}`);
+  }
+  return snapshot;
+}
+
+snapshotCmd
+  .command("set-context")
+  .description("Set this sprint's goal/commitment and/or a cross-team blocker on an existing snapshot — team-level facts, not per-engineer")
+  .requiredOption("--team <name>")
+  .requiredOption("--sprint <label>")
+  .option("--snapshot-date <date>", "which dated snapshot for this sprint (default: the latest one)")
+  .option("--sprint-goal <text>", "what this sprint was supposed to deliver")
+  .option("--blocked-by <text>", "cross-team dependency blocking this sprint (e.g. \"Platform team's API migration\")")
+  .option("--db <path>", "database file path")
+  .action((opts) => {
+    if (!opts.sprintGoal && !opts.blockedBy) fail("at least one of --sprint-goal or --blocked-by is required");
+    const snapshot = resolveSnapshotOrFail(opts.team, opts.sprint, opts.snapshotDate, opts.db);
+    updateSnapshotContext(snapshot.id, { sprint_goal: opts.sprintGoal, blocked_by: opts.blockedBy }, opts.db);
+    printJson({ ok: true, snapshot_id: snapshot.id, sprint_goal: opts.sprintGoal, blocked_by: opts.blockedBy });
+  });
+
+snapshotCmd
+  .command("set-engineer-context")
+  .description("Set PTO days and/or on-call status for one person on an existing snapshot — true for this sprint only, not a standing roster fact")
+  .requiredOption("--team <name>")
+  .requiredOption("--sprint <label>")
+  .requiredOption("--engineer <name>")
+  .option("--snapshot-date <date>", "which dated snapshot for this sprint (default: the latest one)")
+  .option("--pto-days <n>", "days out this sprint")
+  .option("--on-call", "carrying on-call/support rotation this sprint")
+  .option("--db <path>", "database file path")
+  .action((opts) => {
+    if (opts.ptoDays === undefined && !opts.onCall) fail("at least one of --pto-days or --on-call is required");
+    const snapshot = resolveSnapshotOrFail(opts.team, opts.sprint, opts.snapshotDate, opts.db);
+    setEngineerSnapshotContext(
+      snapshot.id,
+      opts.engineer,
+      { ptoDays: opts.ptoDays !== undefined ? Number(opts.ptoDays) : undefined, onCall: Boolean(opts.onCall) },
+      opts.db,
+    );
+    printJson({ ok: true, snapshot_id: snapshot.id, engineer: opts.engineer, pto_days: opts.ptoDays, on_call: Boolean(opts.onCall) });
+  });
+
+snapshotCmd
+  .command("rename-sprint")
+  .description("Merge two sprint labels that turned out to be the same real sprint — e.g. a short label typed by hand and the fuller auto-detected name")
+  .requiredOption("--team <name>")
+  .requiredOption("--from <label>", "the label to rename away from")
+  .requiredOption("--to <label>", "the label to rename to — usually the fuller/more-detected-from-source one")
+  .option("--db <path>", "database file path")
+  .action((opts) => {
+    try {
+      const changed = renameSprintLabel(opts.team, opts.from, opts.to, opts.db);
+      printJson({ ok: true, team: opts.team, from: opts.from, to: opts.to, snapshots_renamed: changed });
+    } catch (error) {
+      fail(error instanceof Error ? error.message : String(error));
+    }
+  });
+
+snapshotCmd
+  .command("delete")
+  .description("Permanently remove a single saved snapshot — the escape hatch for a confirmed accidental duplicate, not a routine correction. No undo.")
+  .requiredOption("--team <name>")
+  .requiredOption("--sprint <label>")
+  .requiredOption("--snapshot-date <date>", "which dated snapshot to delete (required — no \"latest\" default, to avoid deleting the wrong one when more than one exists)")
+  .option("--db <path>", "database file path")
+  .action((opts) => {
+    const snapshot = resolveSnapshotOrFail(opts.team, opts.sprint, opts.snapshotDate, opts.db);
+    deleteSnapshot(snapshot.id, opts.db);
+    printJson({ ok: true, deleted_snapshot_id: snapshot.id, team: opts.team, sprint: opts.sprint, snapshot_date: opts.snapshotDate });
+  });
+
 program
   .command("history")
   .description("List saved snapshots for a team")
@@ -379,6 +612,9 @@ program
           sprint: row.sprint,
           snapshot_date: row.snapshot_date,
           sprint_start_date: row.sprint_start_date,
+          sprint_goal: row.sprint_goal,
+          blocked_by: row.blocked_by,
+          engineer_context: getEngineerSnapshotContext(row.id, opts.db),
           team_velocity: report.team_metrics.team_velocity,
           total_resolved: report.team_metrics.total_resolved,
           team_avg_cycle_time_hours: report.team_metrics.team_avg_cycle_time_hours,
@@ -393,6 +629,7 @@ program
   .requiredOption("--team <name>")
   .option("--sprint <label>", "restrict to one sprint's updates; omit for full cross-sprint history")
   .option("--reason", "also generate a synthesized, accumulated report over the whole trend (patterns across checkpoints, not per-snapshot)")
+  .option("--engineer <name>", "with --reason, scope the accumulated report to just this person's own trajectory instead of the whole team's")
   .option("--provider <name>", "ollama (default) or claude — only used with --reason", "ollama")
   .option("--url <url>", "Ollama server URL — only used with --reason", "http://localhost:11434")
   .option("--model <name>", "model name — only used with --reason")
@@ -407,11 +644,20 @@ program
         sprint: row.sprint,
         report: TeamReportSchema.parse(JSON.parse(row.report_json)),
       }));
-      const trend = computeTrend(points);
+      const trend = overlayCurrentRoles(opts.team, computeTrend(points), opts.db);
 
       if (!opts.reason) return printJson(trend);
 
       const provider = resolveReasoningProvider(opts);
+
+      if (opts.engineer) {
+        if (opts.engineer === "Unassigned") fail(`"Unassigned" is a shared backlog bucket, not a person — there's no individual trajectory to report on.`);
+        const personTrend = trend.engineers.find((e) => e.name === opts.engineer);
+        if (!personTrend) fail(`"${opts.engineer}" doesn't appear in any saved snapshot for "${opts.team}"${opts.sprint ? ` sprint "${opts.sprint}"` : ""}`);
+        const cumulative = await reasonAboutPersonTrend(personTrend, opts.team, provider, { freeText: opts.context });
+        return printJson({ engineer: opts.engineer, trend: personTrend, cumulative });
+      }
+
       const cumulative = await reasonAboutTrend(trend, provider, { freeText: opts.context });
       printJson({ ...trend, cumulative });
     } catch (error) {

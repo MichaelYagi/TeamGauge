@@ -12,6 +12,17 @@ export interface TeamMeta {
   sprint: string;
 }
 
+const UNASSIGNED = "Unassigned";
+
+// "Unassigned" is a backlog bucket, not a teammate — it reads oddly mixed
+// in among real people in whatever order a Map happened to encounter names
+// (arbitrary — the first issue in the source that has no assignee decides
+// where it lands). Always last, stable otherwise so real engineers keep
+// whatever order they were already in.
+function sortUnassignedLast<T extends { name: string }>(engineers: T[]): T[] {
+  return [...engineers].sort((a, b) => Number(a.name === UNASSIGNED) - Number(b.name === UNASSIGNED));
+}
+
 // Merges results from one or more providers into a single set of
 // per-engineer signals, keyed by engineer name.
 function mergeProviderResults(results: ProviderResult[]): EngineerSignals[] {
@@ -40,7 +51,7 @@ export function buildTeamReport(
   providerResults: ProviderResult[],
   roster?: Roster,
 ): TeamReport {
-  const mergedEngineers = mergeProviderResults(providerResults);
+  const mergedEngineers = sortUnassignedLast(mergeProviderResults(providerResults));
 
   const engineers: Engineer[] = mergedEngineers.map((engineer) => {
     const { role, weight } = resolveRosterEntry(engineer.name, engineer.role, roster);

@@ -1,4 +1,4 @@
-import type { IssueAdapter } from "../common/issueAdapter.js";
+import { isCompletingResolution, isUrgentPriorityName, type IssueAdapter } from "../common/issueAdapter.js";
 import { parseJiraCsvDate } from "./parseJiraDate.js";
 
 // One row from a Jira CSV export, keyed by header name (see CSVProvider for
@@ -27,7 +27,11 @@ export const defaultJiraCsvAdapter: IssueAdapter<CsvRow> = {
   },
   getResolved(row) {
     const resolved = field(row, "Resolved");
-    return resolved.length > 0 ? parseJiraCsvDate(resolved) : null;
+    if (resolved.length === 0) return null;
+    // A resolution date alone doesn't mean the work was actually done —
+    // Jira sets it on cancellation too (see isCompletingResolution).
+    if (!isCompletingResolution(field(row, "Resolution"))) return null;
+    return parseJiraCsvDate(resolved);
   },
   getContextKey(row) {
     const epic = field(row, "Custom field (Epic Link)");
@@ -44,8 +48,7 @@ export const defaultJiraCsvAdapter: IssueAdapter<CsvRow> = {
     return status.includes("block") || flagged.length > 0;
   },
   isUrgentPriority(row) {
-    const priority = field(row, "Priority").toLowerCase();
-    return priority === "blocker" || priority === "critical" || priority === "high" || priority === "highest";
+    return isUrgentPriorityName(field(row, "Priority"));
   },
   getStoryPoints(row) {
     const raw = field(row, "Custom field (Story Points)");
@@ -63,5 +66,9 @@ export const defaultJiraCsvAdapter: IssueAdapter<CsvRow> = {
     // sprint — before this adapter ever sees the row.
     const sprint = field(row, "Sprint");
     return sprint.length > 0 ? sprint : null;
+  },
+  getIssueKey(row) {
+    const key = field(row, "Issue key");
+    return key.length > 0 ? key : null;
   },
 };

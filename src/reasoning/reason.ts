@@ -28,6 +28,24 @@ export async function reasonAboutReport(
   ctx?: ReasoningContext,
 ): Promise<TeamReport> {
   const result = await provider.reason(report, ctx);
+
+  // A real, observed failure: a smaller local model returned a fully
+  // populated team_recommendations while leaving engineer_recommendations
+  // completely empty — a schema-valid (just empty) array, so it passed
+  // validation and silently shipped as a "successful" response with zero
+  // per-engineer notes. That's worse than an error: the UI showed
+  // "Recommendations generated" with team-level content, giving no
+  // indication anything was missing. Fail loudly instead — the prompt now
+  // explicitly demands one entry per named engineer (see buildPrompt), so
+  // this should be rare; when it still happens, the caller needs to know
+  // rather than silently getting half a report.
+  const namedEngineers = report.engineers.filter((e) => e.name !== UNASSIGNED);
+  if (namedEngineers.length > 0 && result.engineer_recommendations.length === 0) {
+    throw new Error(
+      `the model returned team-level recommendations but no per-engineer recommendations at all (expected ${namedEngineers.length}) — this is a known gap with some smaller/local models. Try a different model, or retry.`,
+    );
+  }
+
   const byName = new Map(result.engineer_recommendations.map((rec) => [rec.name, rec]));
 
   return {

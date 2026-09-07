@@ -10,12 +10,21 @@ export async function withTempFile<T>(
   suffix: string,
   fn: (filePath: string) => Promise<T>,
 ): Promise<T> {
-  const dir = await mkdtemp(path.join(tmpdir(), "teamgauge-"));
-  const filePath = path.join(dir, `upload${suffix}`);
+  const { path: filePath, cleanup } = await createTempFile(buffer, suffix);
   try {
-    await writeFile(filePath, buffer);
     return await fn(filePath);
   } finally {
-    await rm(dir, { recursive: true, force: true });
+    await cleanup();
   }
+}
+
+// Same scratch-file mechanics as withTempFile, but for a caller that needs
+// to read the file more than once across a span of `await`s (e.g. one
+// provider call, then conditionally another) rather than within a single
+// callback — the caller is responsible for calling `cleanup()` when done.
+export async function createTempFile(buffer: Buffer, suffix: string): Promise<{ path: string; cleanup: () => Promise<void> }> {
+  const dir = await mkdtemp(path.join(tmpdir(), "teamgauge-"));
+  const filePath = path.join(dir, `upload${suffix}`);
+  await writeFile(filePath, buffer);
+  return { path: filePath, cleanup: () => rm(dir, { recursive: true, force: true }) };
 }

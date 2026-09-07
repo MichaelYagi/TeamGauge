@@ -48,6 +48,18 @@ export function getDb(dbPath: string = process.env.TEAMGAUGE_DB || DEFAULT_DB_PA
       created_at TEXT NOT NULL
     );
 
+    -- Per-snapshot, per-engineer facts that explain reduced throughput or
+    -- elevated context-switching WITHOUT being a standing roster fact — PTO
+    -- and on-call rotation are true for one sprint, not the person in
+    -- general, which is exactly what separates this from roster_entries.notes.
+    CREATE TABLE IF NOT EXISTS snapshot_engineer_context (
+      snapshot_id INTEGER NOT NULL REFERENCES snapshots(id),
+      engineer_name TEXT NOT NULL,
+      pto_days REAL,
+      on_call INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (snapshot_id, engineer_name)
+    );
+
     CREATE INDEX IF NOT EXISTS idx_snapshots_team ON snapshots(team_name, snapshot_date);
     CREATE INDEX IF NOT EXISTS idx_roster_lookup ON roster_entries(team_name, engineer_name, effective_from);
   `);
@@ -57,6 +69,14 @@ export function getDb(dbPath: string = process.env.TEAMGAUGE_DB || DEFAULT_DB_PA
   const rosterColumns = db.prepare(`PRAGMA table_info(roster_entries)`).all() as Array<{ name: string }>;
   if (!rosterColumns.some((col) => col.name === "departed")) {
     db.exec(`ALTER TABLE roster_entries ADD COLUMN departed INTEGER NOT NULL DEFAULT 0`);
+  }
+
+  const snapshotColumns = db.prepare(`PRAGMA table_info(snapshots)`).all() as Array<{ name: string }>;
+  if (!snapshotColumns.some((col) => col.name === "sprint_goal")) {
+    db.exec(`ALTER TABLE snapshots ADD COLUMN sprint_goal TEXT`);
+  }
+  if (!snapshotColumns.some((col) => col.name === "blocked_by")) {
+    db.exec(`ALTER TABLE snapshots ADD COLUMN blocked_by TEXT`);
   }
 
   cached = db;

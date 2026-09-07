@@ -1,4 +1,4 @@
-import type { IssueAdapter } from "../common/issueAdapter.js";
+import { isCompletingResolution, isUrgentPriorityName, type IssueAdapter } from "../common/issueAdapter.js";
 
 // Adapter boundary so JiraProvider never hardcodes Jira field paths (per
 // claude.md: "Do not hardcode Jira fields; use adapters"). Swap
@@ -41,7 +41,13 @@ export const defaultJiraAdapter: JiraIssueAdapter = {
     return (fields(issue).created as string | undefined) ?? null;
   },
   getResolved(issue) {
-    return (fields(issue).resolutiondate as string | undefined) ?? null;
+    const resolutiondate = (fields(issue).resolutiondate as string | undefined) ?? null;
+    if (!resolutiondate) return null;
+    // A resolution date alone doesn't mean the work was actually done —
+    // Jira sets it on cancellation too (see isCompletingResolution).
+    const resolution = fields(issue).resolution as { name?: string } | undefined;
+    if (!isCompletingResolution(resolution?.name)) return null;
+    return resolutiondate;
   },
   getContextKey(issue) {
     const project = fields(issue).project as { key?: string } | undefined;
@@ -56,12 +62,16 @@ export const defaultJiraAdapter: JiraIssueAdapter = {
     return status.includes("block");
   },
   isUrgentPriority(issue) {
-    const priority = this.getPriority(issue).toLowerCase();
-    return priority === "high" || priority === "highest";
+    return isUrgentPriorityName(this.getPriority(issue));
   },
   getProjectKey(issue) {
     const project = fields(issue).project as { key?: string } | undefined;
     return project?.key ?? null;
+  },
+  getIssueKey(issue) {
+    // Jira REST issues carry "key" (e.g. "PDD-2424") at the top level, not
+    // under fields — a stable identifier, unlike sprint's custom field.
+    return (issue.key as string | undefined) ?? null;
   },
   // Not implemented: Jira's REST API exposes sprint via a custom field whose
   // ID varies per instance (commonly but not reliably customfield_10016) —

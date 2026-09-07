@@ -4,6 +4,7 @@ import type { ProviderOutput } from "../../schema/canonical.js";
 import type { JiraSource } from "../../schema/config.js";
 import { defaultJiraAdapter, type JiraIssueAdapter, type RawJiraIssue } from "./adapter.js";
 import { computeSignalsForIssues, groupIssuesByEngineer } from "../common/computeSignals.js";
+import { detectTeamAndSprint } from "../common/detect.js";
 
 interface JiraSearchResponse {
   issues?: RawJiraIssue[];
@@ -22,7 +23,13 @@ export class JiraProvider implements Provider<JiraSource> {
 
   async ingest(source: JiraSource): Promise<ProviderResult> {
     const issues = await this.loadIssues(source);
-    return { engineers: groupIssuesByEngineer(issues, this.adapter) };
+    // Team name is safe to auto-detect here too (project key is a stable
+    // field, unlike sprint — see defaultJiraAdapter's comment on why
+    // getSprintName isn't implemented). detectTeamAndSprint only reports
+    // `sprint` when the adapter actually implements getSprintName, so this
+    // naturally stays undefined for JSON/URL/JQL without special-casing it.
+    const detected = detectTeamAndSprint(issues, this.adapter);
+    return { engineers: groupIssuesByEngineer(issues, this.adapter), detected };
   }
 
   // Flat aggregate matching claude.md's documented provider output shape

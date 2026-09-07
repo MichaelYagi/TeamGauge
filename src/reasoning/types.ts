@@ -11,6 +11,12 @@ export interface ReasoningContext {
   sprintLengthDays?: number;
   daysIntoSprint?: number;
   engineerNotes?: Record<string, string>;
+  // Per-snapshot facts — true for THIS sprint only, unlike the standing
+  // roster/work-pattern facts above. sprintGoal/blockedBy are team-level;
+  // engineerContext is per person (PTO days taken, on-call this sprint).
+  sprintGoal?: string;
+  blockedBy?: string;
+  engineerContext?: Record<string, { ptoDays?: number | null; onCall?: boolean }>;
 }
 
 export interface ReasoningProvider {
@@ -34,6 +40,8 @@ export function buildPrompt(report: TeamReport, ctx: ReasoningContext = {}): str
       signals,
       derived_metrics,
       work_pattern_note: ctx.engineerNotes?.[name] || undefined,
+      pto_days_this_sprint: ctx.engineerContext?.[name]?.ptoDays ?? undefined,
+      on_call_this_sprint: ctx.engineerContext?.[name]?.onCall || undefined,
     })),
   };
 
@@ -52,6 +60,12 @@ export function buildPrompt(report: TeamReport, ctx: ReasoningContext = {}): str
 
     ctx.charter ? `This team's charter / area of responsibility: ${ctx.charter}` : null,
     sprintTiming,
+    ctx.sprintGoal
+      ? `This sprint's stated goal/commitment: ${ctx.sprintGoal}. Assess actual delivery against this commitment specifically, not just raw throughput — a team that resolved fewer items than usual but delivered the stated goal is not underperforming.`
+      : null,
+    ctx.blockedBy
+      ? `This team reported being blocked on: ${ctx.blockedBy}. Attribute related slowdowns (low velocity, high cycle time, stalled items) to this external dependency, not to the team's own performance — it's outside their control.`
+      : null,
 
     "Field meanings you must use precisely:",
     "- signals.work_items: all items assigned this sprint (open + resolved).",
@@ -59,8 +73,25 @@ export function buildPrompt(report: TeamReport, ctx: ReasoningContext = {}): str
     "- derived_metrics.velocity: story points closed if the source tracks them, else same as resolved_count.",
     "- signals.cycle_time_hours: mean time from created to resolved, resolved items only (0 if none resolved yet — not necessarily fast).",
     "- derived_metrics.weight: the capacity/tolerance multiplier already applied to compute load_score (1 = no adjustment; the team lead sets this — e.g. a senior role given <1 because they're expected to absorb the same raw workload more comfortably, or >1 if less so). load_score already has this baked in — do not re-apply it — but weight tells you *why* two engineers with similar raw signals can have different load_score, and it changes what a fair redistribution target looks like: someone at weight <1 is the team's own stated view of who has more headroom, so prefer naming them as a destination over someone at weight 1 who is already at unadjusted capacity.",
+    "- pto_days_this_sprint (per engineer, when present): known days out this sprint specifically — not a standing fact about them. Reduced work_items/resolved_count/velocity proportional to days out is expected and must never be flagged as underperformance; only comment on it if their output is LOW even accounting for the time they were actually available.",
+    "- on_call_this_sprint (per engineer, when present): they were carrying on-call/support rotation this sprint. This explains elevated context_switching_index and reduced throughput on assigned sprint work that has nothing to do with the sprint's planned work — treat it as an explanation, not a performance signal, and don't recommend redistributing MORE work onto someone currently on-call.",
     "- team_metrics: team-wide totals/averages across every entry, including \"Unassigned\" — use it as the baseline you compare individuals against.",
     "- work_pattern_note (per engineer, when present): a known, team-supplied fact about how that person/role normally works — treat it as ground truth that overrides a default assumption, never as something to second-guess.",
+
+    // A real, observed failure mode with smaller local models: they produce
+    // a full, substantive team_recommendations.notes (correctly referencing
+    // engineers by name) while leaving engineer_recommendations completely
+    // empty — which passes schema validation (it's a valid, just-empty,
+    // array) and previously shipped as a silent partial success with no
+    // per-engineer notes at all. The generic per-field schema description
+    // wasn't a strong enough signal on its own; spelling out the exact
+    // required count and names, in the prompt body (not just the schema),
+    // is a second, more forceful nudge at the one place this was actually
+    // observed to fail.
+    `engineer_recommendations is REQUIRED to contain exactly one entry for each of these ${report.engineers.filter((e) => e.name !== UNASSIGNED).length} engineers, by name: ${report.engineers
+      .filter((e) => e.name !== UNASSIGNED)
+      .map((e) => e.name)
+      .join(", ")}. Do not return an empty engineer_recommendations array and do not skip anyone from this list — if someone genuinely has nothing notable, still include their entry with empty redistribute_to/reduce_scope arrays and a short notes sentence saying why (e.g. "load is in line with the team average, nothing to flag").`,
 
     hasUnassigned
       ? [

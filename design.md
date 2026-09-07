@@ -106,17 +106,22 @@ This layer is architecturally separate from ingestion/normalization/aggregation 
 
 The UI renders every free-text field this layer produces (per-engineer notes, `team_recommendations.notes`/`sprint_feasibility`, and the cumulative pass's `summary`/`recommendations`/`concerning_trends`) as markdown, not as escaped plain text — see claude.md's "Rendering model-generated text as markdown" for the mechanism (`formatMessage`) and the `<p>`-vs-`<div>` wrapping pitfall it surfaced.
 
+`ReasoningContext` also carries per-sprint facts the roster can't hold — PTO days, on-call status, the sprint's stated goal, and a cross-team blocker — so the prompt can explain reduced output or elevated context-switching without misreading it as a performance problem. See claude.md's "Sprint Context" section for the full shape and the CLI/API surface that sets these facts.
+
 ### 7. Persistence Layer
 
-A local SQLite file (single file, no server process — `./teamgauge.db` by default, overridable via `TEAMGAUGE_DB` or `--db`). Three tables:
+A local SQLite file (single file, no server process — `./teamgauge.db` by default, overridable via `TEAMGAUGE_DB` or `--db`). Four tables:
 
 - **`teams`** — a saved profile: name, sprint length, charter. Created/edited via the `setup` questionnaire or `team create`.
 - **`roster_entries`** — append-only, dated role facts. A role change is a new row with a new `effective_from`, never an overwrite of the old one. Resolving a roster "as of" a date takes the most recent entry with `effective_from <= that date` per engineer — this is what keeps a historical snapshot's engineer roles accurate even after someone's real-world role later changes. A departure is the same pattern: a dated row with a `departed` flag, not a deletion — it excludes someone from the default roster view/autocomplete from that date forward without touching any past snapshot. Reactivation is just a later ordinary role entry — no separate mechanism needed, since the "latest entry as of a date" rule already makes it supersede the departure.
-- **`snapshots`** — append-only, one row per `analyze` run against a saved team, holding the full `TeamReport` JSON plus `sprint`/`snapshot_date`/optional `sprint_start_date`. Re-analyzing the same sprint — including a manager checking it again mid-sprint — always inserts a new row; it never overwrites a prior one. The one in-place update: `reason` enriches an existing snapshot's `report_json` with recommendations, since that's the same data point gaining an annotation, not a new observation.
+- **`snapshots`** — append-only, one row per `analyze` run against a saved team, holding the full `TeamReport` JSON plus `sprint`/`snapshot_date`/optional `sprint_start_date`/`sprint_goal`/`blocked_by`. Re-analyzing the same sprint — including a manager checking it again mid-sprint — always inserts a new row; it never overwrites a prior one. The two in-place updates: `reason` enriches an existing snapshot's `report_json` with recommendations, and `sprint_goal`/`blocked_by` can be corrected after the fact — both are the same data point gaining/correcting an annotation, not a new observation.
+- **`snapshot_engineer_context`** — per-engineer, per-snapshot PTO days and on-call status, upserted on `(snapshot_id, engineer_name)`. Deliberately a separate table from `roster_entries`, not an extra column there: roster facts are standing (true of the person in general until changed), this is true for one sprint only — see claude.md's "Sprint Context" section for the full contract and why conflating the two would let a stale PTO fact silently "explain" an unrelated snapshot.
 
 Analyzing without `--team` remains fully stateless — this layer is additive, not a requirement for using the tool.
 
-An exact team+sprint+date collision is refused by default (`--force` to override) — see claude.md's "Exact-collision duplicate guard" for why: it's almost always an accidental re-import, and a silent duplicate would pollute `trend`'s deltas with a spurious near-zero (or misleadingly small) same-day change.
+An exact team+sprint+date collision is refused by default (`--force` to override) — see claude.md's "Exact-collision duplicate guard" for why: it's almost always an accidental re-import, and a silent duplicate would pollute `trend`'s deltas with a spurious near-zero (or misleadingly small) same-day change. `--force` overrides that identity check but not a content check layered on top of it: if the new report is byte-identical to the colliding snapshot's, the save is refused unconditionally — no flag bypasses this, since an exact duplicate has no new information in it regardless of how the user asked for it to be saved.
+
+Sprint identity itself can also silently drift — the same real sprint resolved as `"26.18"` on one run and the fuller auto-detected `"BDPSA Sprint 26.18"` on another, with no built-in link between the two labels. `findSimilarSprint` checks a newly resolved label against every label already on record for that team and surfaces a non-blocking warning (not a block — it's `analyze` that stays in charge of what to write, this only flags a suspicious pattern) when one contains the other. That warning is preventive, not curative — `teamgauge snapshot rename-sprint` / `POST /api/snapshots/rename-sprint` / the Team Setup panel's "Merge Sprint Labels" control all merge two labels that already drifted apart before the warning existed, refusing rather than overwriting if the merge would collide on an existing team+sprint+date. See claude.md's "Persistence Layer" section for all three fixes in detail — they were built directly from a real user's fragmented BDPSA history, not speculatively.
 
 Every default-to-"today" date in this layer (a card's roster save, a departure, an `analyze --team` with no `--date`) must be the machine's **local** calendar date — see claude.md's "A note on 'today' and local vs. UTC dates" for a real bug this caused: `toISOString().slice(0, 10)` returns the UTC date, which briefly disagreed with local "today" and caused freshly-saved roster entries to look invisible to a same-day analyzed report. `src/util/date.ts`'s `localToday()` is the one correct way to get this value on the Node side.
 
@@ -164,13 +169,15 @@ Lists what's actually available from a provider — Ollama via its own `GET /api
 ```text
 teamgauge setup [--db <path>]
 teamgauge team list|show|create|set-role [...] [--db <path>]
-teamgauge analyze --input <file|url> --team <name> --sprint <label> [--date <date>] [--sprint-start <date>] [--force] [--db <path>]
+teamgauge analyze --input <file|url> --team <name> --sprint <label> [--date <date>] [--sprint-start <date>] [--sprint-goal <text>] [--blocked-by <text>] [--force] [--db <path>]
+teamgauge snapshot set-context --team <name> --sprint <label> [--snapshot-date <date>] [--sprint-goal <text>] [--blocked-by <text>]
+teamgauge snapshot set-engineer-context --team <name> --sprint <label> --engineer <name> [--snapshot-date <date>] [--pto-days <n>] [--on-call]
 teamgauge history --team <name> [--sprint <label>] [--db <path>]
 teamgauge trend --team <name> [--sprint <label>] [--db <path>] [--reason --provider ollama|claude --url <ollama-url> --model <name> --context <text>]
 teamgauge reason --team <name> --sprint <label> [--snapshot-date <date>] [...]
 ```
 
-See claude.md's "Persistence Layer" section for the full contract. In short: `setup`/`team` manage a saved profile (roster with dated role history, sprint length, charter); `analyze --team` saves a dated, append-only snapshot instead of just printing JSON; `history`/`trend` read those snapshots back (`trend` computes deterministic deltas — team-wide and per engineer — between consecutive snapshots); `reason --team` auto-enriches the prompt with the profile's charter, sprint-position, and roster notes instead of requiring `--context` every time. All of this is additive — every command still works exactly as before without `--team`, with zero persistence.
+See claude.md's "Persistence Layer" section for the full contract. In short: `setup`/`team` manage a saved profile (roster with dated role history, sprint length, charter); `analyze --team` saves a dated, append-only snapshot instead of just printing JSON; `snapshot set-context`/`set-engineer-context` attach or correct per-sprint facts (sprint goal, cross-team blocker, PTO, on-call — see claude.md's "Sprint Context") on an already-saved snapshot; `history`/`trend` read those snapshots back (`trend` computes deterministic deltas — team-wide and per engineer — between consecutive snapshots); `reason --team` auto-enriches the prompt with the profile's charter, sprint-position, roster notes, and all four sprint-context facts instead of requiring `--context` every time. All of this is additive — every command still works exactly as before without `--team`, with zero persistence.
 
 `trend --reason` additionally runs the cumulative reasoning pass (see "6. Reasoning Layer" above) over the whole trend and merges it into the same JSON output — a distinct, freestanding `{ summary, recommendations, concerning_trends }`, not a fill-in of any single snapshot's fields. `POST /api/trend-reason` is the server equivalent, returning `{ trend, cumulative }`.
 
@@ -196,6 +203,8 @@ See claude.md's "Persistence Layer" section for the full contract. In short: `se
 ### Components
 
 - Team Setup panel: team picker, profile fields (name/sprint length/charter), read-only roster overview (mark-as-departed/reactivate only — no add/edit-role form; role/weight/notes are edited on the engineer card in an analyzed report instead, which is the roster's only feeder)
+- Engineer card additionally carries PTO days / on-call fields with their own "Save Sprint Context" button, visually separated from the roster-save fields above it — a different kind of fact (one-sprint-only) persisted to a different place (the snapshot, not the roster); Input panel carries the two team-level per-sprint facts (sprint goal, cross-team blocker), shown read-only in the team summary once loaded
+- Team Setup panel's "Merge Sprint Labels" control — two selects populated from the selected team's known sprints, confirm-guarded, for correcting sprint label drift after the fact (see "7. Persistence Layer" above)
 - History & Trends panel: team/sprint selector, saved-snapshots table, team-wide and per-engineer trend-delta tables (colored by whether each metric's direction is actually good or bad, not by raw arrow direction), and an Accumulated Report sub-form that triggers the cumulative reasoning pass and renders `{ summary, recommendations, concerning_trends }`
 - Input panel, with a "Use saved team" selector that swaps manual team-name/roster-upload for a saved profile — pre-filled from Team Setup's selector as a one-way convenience (only while still on its default; an explicit choice is never overridden), see claude.md for why the two selectors stay otherwise independent
 - Team selector (hidden when `reports` has a single entry)
@@ -228,7 +237,7 @@ All must output normalized signals.
 
 Multi-sprint trend analysis (previously listed here) is now built — see "7. Persistence Layer" and the "Team Profile & History Commands" section above. `history`/`trend` browsing and the cumulative reasoning pass are now in the UI too (see "UI Design" above) — nothing in this system is CLI-only anymore.
 
-- **PTO/reduced-capacity notes**, **sprint goal/commitment tracking**, **on-call rotation flags**, and **cross-team dependency notes** — see claude.md's "Deferred to a future phase" list for the shape of each; all are cheap additions to the snapshot/roster schema once there's a concrete need.
+PTO/reduced-capacity notes, sprint goal/commitment tracking, on-call rotation flags, and cross-team dependency notes (previously listed here as deferred) are now built too — see claude.md's "Sprint Context" section. Nothing remains on the deferred list at this time.
 
 ---
 
