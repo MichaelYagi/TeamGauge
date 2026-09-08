@@ -20,18 +20,25 @@ export class ClaudeReasoningProvider implements ReasoningProvider {
 
   // Generic structured-output call — see OllamaReasoningProvider.chat.
   //
-  // max_tokens is generous (8192) because the prompt explicitly asks for
-  // multi-sentence, named, comparative analysis per engineer plus team-wide
-  // notes — a team with several engineers can genuinely produce more JSON
-  // output than a small budget allows. A cut-off response is stopped mid
-  // string, which JSON.parse reports as an opaque "Unterminated string"
-  // error with no indication that the real cause was a length limit — so
-  // stop_reason is checked first and turned into a clear, actionable error
-  // instead of letting that confusing parse failure surface to the caller.
+  // max_tokens is generous (16384, raised from an original 8192) because
+  // this same chat() now backs two very differently-sized schemas:
+  // RECOMMENDATIONS_JSON_SCHEMA (one snapshot's per-engineer notes, the
+  // original reason for 8192) and the much richer CUMULATIVE_JSON_SCHEMA
+  // (team_overview's "usually means" diagnostics, engineer_patterns
+  // scanning every engineer's full trajectory, a genuinely long
+  // overall_assessment) added later for the Accumulated Report — a team
+  // with a long history and many engineers can produce noticeably more
+  // output under that schema than 8192 reliably allows; a real cut-off
+  // was observed against a real 19-sprint, 12-engineer team's Accumulated
+  // Report. A cut-off response is stopped mid string, which JSON.parse
+  // reports as an opaque "Unterminated string" error with no indication
+  // the real cause was a length limit — so stop_reason is checked first
+  // and turned into a clear, actionable error instead of letting that
+  // confusing parse failure surface to the caller.
   async chat(prompt: string, jsonSchema: Record<string, unknown>): Promise<unknown> {
     const response = await this.client.messages.create({
       model: this.model,
-      max_tokens: 8192,
+      max_tokens: 16384,
       messages: [{ role: "user", content: prompt }],
       output_config: { format: { type: "json_schema", schema: jsonSchema } },
     });

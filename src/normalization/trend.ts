@@ -1,4 +1,4 @@
-import type { TeamReport } from "../schema/canonical.js";
+import type { Signals, TeamReport } from "../schema/canonical.js";
 
 export interface SnapshotPoint {
   snapshot_date: string;
@@ -19,11 +19,29 @@ export interface EngineerMetricPoint {
   snapshot_date: string;
   sprint: string;
   role: string;
+  // The capacity/tolerance multiplier already baked into load_score at
+  // analyze time (see deriveMetrics) — exposed here for the same reason
+  // buildPrompt (types.ts) exposes it to single-sprint reasoning: two
+  // people with similar raw signals can land on different load_score
+  // because of weight, and the reasoning step needs to see WHY, not just
+  // the already-weighted result, to judge a fair redistribution target.
+  // A real, observed gap: this field didn't exist here at all until
+  // buildPersonTrendPrompt was found asserting "their own load/weight is
+  // visible in this person's points" — a claim that was false the whole
+  // time this field was missing.
+  weight: number;
   load_score: number;
   burnout_risk: string;
   resolved_count: number;
   velocity: number;
   cycle_time_hours: number;
+  // Carried along so a corrected roster weight can be applied retroactively
+  // with load_score/burnout_risk recomputed to match (see
+  // overlayCurrentRoles in src/db/teamProfile.ts) — signals are the raw,
+  // immutable work-item facts deriveMetrics computes load_score FROM;
+  // without them here, a weight correction could only ever relabel the
+  // frozen weight field, leaving load_score inconsistent with it.
+  signals: Signals;
 }
 
 export interface Delta {
@@ -126,11 +144,13 @@ export function computeTrend(snapshotsInDateOrder: SnapshotPoint[]): TeamTrend {
         snapshot_date: s.snapshot_date,
         sprint: s.sprint,
         role: engineer.role,
+        weight: engineer.derived_metrics.weight,
         load_score: engineer.derived_metrics.load_score,
         burnout_risk: engineer.derived_metrics.burnout_risk,
         resolved_count: engineer.derived_metrics.resolved_count,
         velocity: engineer.derived_metrics.velocity,
         cycle_time_hours: engineer.signals.cycle_time_hours,
+        signals: engineer.signals,
       });
       byEngineer.set(engineer.name, points);
     }

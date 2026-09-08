@@ -16,6 +16,7 @@
       <button type="button" class="tab-btn active" data-tab="analyze" role="tab" aria-selected="true">Analyze</button>
       <button type="button" class="tab-btn" data-tab="history" role="tab" aria-selected="false">History &amp; Trends</button>
       <button type="button" class="tab-btn" data-tab="setup" role="tab" aria-selected="false">Team Setup</button>
+      <button type="button" class="tab-btn" data-tab="settings" role="tab" aria-selected="false">Settings</button>
     </nav>
   </header>
 
@@ -119,26 +120,7 @@
         <section id="reasoning-panel" class="panel">
           <h2>Recommendations</h2>
           <form id="reason-form">
-            <div id="reason-fields">
-              <label>
-                Provider
-                <select id="reasonProvider">
-                  <option value="ollama">Ollama (local)</option>
-                  <option value="claude">Claude API</option>
-                </select>
-              </label>
-              <label id="reason-url-field">
-                Ollama URL
-                <input type="text" id="reasonUrl" value="http://localhost:11434" />
-              </label>
-              <label>
-                Model
-                <span class="model-field-row">
-                  <select id="reasonModel"><option value="">Loading…</option></select>
-                  <button type="button" id="refreshModels" title="Refresh model list">⟳</button>
-                </span>
-              </label>
-            </div>
+            <p class="notes-placeholder">Uses the provider/model set in <strong>Settings</strong>.</p>
             <label>
               Team context (optional) — process facts the model can't infer from the numbers alone
               <textarea id="reasonContext" rows="2" placeholder="e.g. Unassigned tickets are picked up by devs after finishing their own work — a large Unassigned count is normal buffer capacity, not backlog risk."></textarea>
@@ -194,26 +176,7 @@
           <h3>Accumulated Report</h3>
           <p class="notes-placeholder">Runs a fresh reasoning pass over the entire history above — a synthesis, not a list of past recommendations.</p>
           <form id="cumulative-form">
-            <div id="cumulative-fields">
-              <label>
-                Provider
-                <select id="cumulativeProvider">
-                  <option value="ollama">Ollama (local)</option>
-                  <option value="claude">Claude API</option>
-                </select>
-              </label>
-              <label id="cumulative-url-field">
-                Ollama URL
-                <input type="text" id="cumulativeUrl" value="http://localhost:11434" />
-              </label>
-              <label>
-                Model
-                <span class="model-field-row">
-                  <select id="cumulativeModel"><option value="">Loading…</option></select>
-                  <button type="button" id="refreshCumulativeModels" title="Refresh model list">⟳</button>
-                </span>
-              </label>
-            </div>
+            <p class="notes-placeholder">Uses the provider/model set in <strong>Settings</strong>.</p>
             <label>
               Additional context (optional)
               <textarea id="cumulativeContext" rows="2" placeholder="e.g. this team just came off a reorg in sprint 3 — expect a dip around then"></textarea>
@@ -279,6 +242,37 @@
           <button type="button" id="mergeSprintBtn">Merge</button>
         </div>
         <p id="merge-sprint-status" role="status"></p>
+      </section>
+    </div>
+
+    <div class="tab-page" data-tab="settings" hidden>
+      <section id="settings-panel" class="panel">
+        <h2>Settings</h2>
+        <p class="notes-placeholder">One reasoning provider/model for the whole app — Recommendations, the Accumulated Report, and Sprint Reports all use this instead of each asking separately. Saved in this browser only. Ollama's small local models have a known ceiling on the more structured reports (see the Sprint Report note below) — pick Claude here if you have it configured and want that depth by default.</p>
+        <form id="settings-form">
+          <div id="settings-fields">
+            <label>
+              Provider
+              <select id="settingsProvider">
+                <option value="ollama">Ollama (local)</option>
+                <option value="claude">Claude API</option>
+              </select>
+            </label>
+            <label id="settings-url-field">
+              Ollama URL
+              <input type="text" id="settingsUrl" value="http://localhost:11434" />
+            </label>
+            <label>
+              Model
+              <span class="model-field-row">
+                <select id="settingsModel"><option value="">Loading…</option></select>
+                <button type="button" id="refreshSettingsModels" title="Refresh model list">⟳</button>
+              </span>
+            </label>
+          </div>
+          <button type="submit">Save Defaults</button>
+        </form>
+        <p id="settings-status" role="status"></p>
       </section>
     </div>
   </main>

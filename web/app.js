@@ -28,12 +28,94 @@ const teamSelector = document.getElementById("team-selector");
 const jsonOutput = document.getElementById("json-output");
 const downloadBtn = document.getElementById("download-json");
 const reasonForm = document.getElementById("reason-form");
-const reasonProvider = document.getElementById("reasonProvider");
-const reasonUrlField = document.getElementById("reason-url-field");
-const reasonUrlInput = document.getElementById("reasonUrl");
-const reasonModelSelect = document.getElementById("reasonModel");
-const refreshModelsBtn = document.getElementById("refreshModels");
 const reasonStatusEl = document.getElementById("reason-status");
+
+// ---- Reasoning settings (Settings tab) ----
+// ONE provider/model for every reasoning call in the app (Recommendations,
+// Accumulated Report, per-person report, Sprint Report) — deliberately not
+// a picker per form. An earlier version gave each of those its own
+// provider/model fields; the user rejected that directly ("1 model for
+// everything, don't split it up like that"), so this is the only place it
+// lives. Persisted to localStorage (per-browser, not shared across
+// devices/users — matching how everything else in this UI, e.g. the roster
+// edit state, is already only as durable as the user makes it) rather than
+// the server, since it's a personal reasoning preference, not team data.
+const REASONING_SETTINGS_KEY = "teamgauge:reasoningSettings";
+
+function getReasoningSettings() {
+  try {
+    const raw = localStorage.getItem(REASONING_SETTINGS_KEY);
+    if (!raw) return { provider: "ollama", url: "http://localhost:11434", model: "" };
+    const parsed = JSON.parse(raw);
+    return {
+      provider: parsed.provider === "claude" ? "claude" : "ollama",
+      url: parsed.url || "http://localhost:11434",
+      model: parsed.model || "",
+    };
+  } catch {
+    return { provider: "ollama", url: "http://localhost:11434", model: "" };
+  }
+}
+
+function saveReasoningSettings(settings) {
+  try {
+    localStorage.setItem(REASONING_SETTINGS_KEY, JSON.stringify(settings));
+  } catch {
+    // Private-browsing/storage-blocked browsers: settings just won't
+    // persist across reloads — every reasoning call still works, it falls
+    // back to getReasoningSettings()'s default each time.
+  }
+}
+
+const settingsProvider = document.getElementById("settingsProvider");
+const settingsUrlField = document.getElementById("settings-url-field");
+const settingsUrl = document.getElementById("settingsUrl");
+const settingsModel = document.getElementById("settingsModel");
+const settingsStatusEl = document.getElementById("settings-status");
+
+function updateSettingsUrlVisibility() {
+  settingsUrlField.hidden = settingsProvider.value !== "ollama";
+}
+
+async function refreshSettingsModels(desiredModel) {
+  settingsModel.innerHTML = `<option value="">Loading…</option>`;
+  try {
+    const params = new URLSearchParams({ provider: settingsProvider.value, url: settingsUrl.value });
+    const response = await fetch(`/api/models?${params}`);
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.error || "failed to list models");
+    settingsModel.innerHTML = body.models.length
+      ? body.models.map((name) => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join("")
+      : `<option value="">No models found</option>`;
+    if (desiredModel && body.models.includes(desiredModel)) settingsModel.value = desiredModel;
+  } catch (error) {
+    settingsModel.innerHTML = `<option value="">Could not load models</option>`;
+  }
+}
+
+function loadSettingsIntoForm() {
+  const settings = getReasoningSettings();
+  settingsProvider.value = settings.provider;
+  settingsUrl.value = settings.url;
+  updateSettingsUrlVisibility();
+  refreshSettingsModels(settings.model);
+}
+
+settingsProvider.addEventListener("change", () => {
+  updateSettingsUrlVisibility();
+  refreshSettingsModels();
+});
+settingsUrl.addEventListener("change", () => refreshSettingsModels());
+document.getElementById("refreshSettingsModels").addEventListener("click", () => refreshSettingsModels(settingsModel.value));
+
+document.getElementById("settings-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  saveReasoningSettings({ provider: settingsProvider.value, url: settingsUrl.value, model: settingsModel.value });
+  settingsStatusEl.textContent = "✓ Saved — used by every reasoning call in the app from now on.";
+  settingsStatusEl.classList.remove("error");
+});
+
+loadSettingsIntoForm();
 
 let currentPayload = null;
 let currentTeamIndex = 0;
@@ -404,10 +486,6 @@ const historyTeamSelect = document.getElementById("historyTeamSelect");
 const historySprintFilter = document.getElementById("historySprintFilter");
 const historyStatusEl = document.getElementById("history-status");
 const historyContentEl = document.getElementById("history-content");
-const cumulativeProvider = document.getElementById("cumulativeProvider");
-const cumulativeUrlField = document.getElementById("cumulative-url-field");
-const cumulativeUrl = document.getElementById("cumulativeUrl");
-const cumulativeModel = document.getElementById("cumulativeModel");
 const cumulativeStatusEl = document.getElementById("cumulative-status");
 
 // Color reflects whether the change is good or bad for that specific metric —
@@ -538,7 +616,18 @@ document.getElementById("history-snapshots-wrap").addEventListener("click", asyn
 // recommendations already exist (from the lightweight /api/history entry —
 // no extra fetch needed to show this much). The full report only gets
 // fetched once "Generate Sprint Report" is actually clicked.
-function renderSprintReportPanel(row) {
+// Every reasoning entry point in this app (this panel, the per-report
+// "Generate Recommendations" form, the Accumulated Report form) shares ONE
+// provider/model, set once in Settings (getReasoningSettings()) — not a
+// picker per form. An earlier version of this panel gave itself its own
+// provider/model fields to fix "there's nowhere in the UI to choose the
+// model," which was a real gap, but three separate pickers scattered
+// across the app (each capable of silently disagreeing with the others)
+// was explicitly rejected in favor of one shared setting: "1 model for
+// everything, don't split it up like that." `preservedContext` carries the
+// just-used free-text context through the render-refresh that follows a
+// generate/regenerate click, so it doesn't get wiped by the fresh render.
+function renderSprintReportPanel(row, preservedContext = "") {
   const wrap = document.getElementById("sprint-report-wrap");
   const content = document.getElementById("sprint-report-content");
   wrap.hidden = false;
@@ -570,6 +659,11 @@ function renderSprintReportPanel(row) {
     </table>
     <h4>Recommendations</h4>
     ${existingRecommendations}
+    <p class="notes-placeholder">Uses the provider/model set in <strong>Settings</strong>.</p>
+    <label>
+      Additional context (optional)
+      <textarea id="sprintReportContext" rows="2" placeholder="e.g. this sprint had a planned reduced-capacity week">${escapeHtml(preservedContext)}</textarea>
+    </label>
     <button type="button" id="generate-sprint-report-btn" data-sprint="${escapeHtml(row.sprint)}" data-date="${escapeHtml(row.snapshot_date)}">
       ${row.team_recommendations_notes || row.engineer_recommendations.length ? "Regenerate Sprint Report" : "Generate Sprint Report"}
     </button>
@@ -605,6 +699,9 @@ document.getElementById("sprint-report-content").addEventListener("click", async
   const snapshotDate = btn.dataset.date;
   const statusEl = document.getElementById("sprint-report-status");
 
+  const { provider, url, model } = getReasoningSettings();
+  const context = document.getElementById("sprintReportContext").value || undefined;
+
   btn.disabled = true;
   statusEl.textContent = "Generating — this reasons over this one saved snapshot, may take a while…";
   statusEl.classList.remove("error");
@@ -613,15 +710,7 @@ document.getElementById("sprint-report-content").addEventListener("click", async
     const response = await fetch("/api/snapshot-reason", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        team,
-        sprint,
-        snapshotDate,
-        provider: cumulativeProvider.value,
-        url: cumulativeUrl.value,
-        model: cumulativeModel.value || undefined,
-        context: document.getElementById("cumulativeContext").value || undefined,
-      }),
+      body: JSON.stringify({ team, sprint, snapshotDate, provider, url, model: model || undefined, context }),
     });
     const body = await response.json();
     if (!response.ok) throw new Error(body.error || "request failed");
@@ -633,7 +722,7 @@ document.getElementById("sprint-report-content").addEventListener("click", async
     await loadHistory();
     const refreshed = currentHistoryRows.find((h) => h.sprint === sprint && h.snapshot_date === snapshotDate);
     if (refreshed) {
-      renderSprintReportPanel(refreshed);
+      renderSprintReportPanel(refreshed, context || "");
       const row = document.querySelector(`.snapshot-row[data-sprint="${CSS.escape(sprint)}"][data-date="${CSS.escape(snapshotDate)}"]`);
       if (row) row.classList.add("selected");
     }
@@ -645,16 +734,108 @@ document.getElementById("sprint-report-content").addEventListener("click", async
   }
 });
 
-// Shared shape between the team-wide Accumulated Report and a per-person
-// one (see renderPersonReportRow below) — same {summary, recommendations,
-// concerning_trends} schema either way (CumulativeReportOutputSchema),
-// just scoped to different data server-side, so the same markup fits both.
-function renderCumulativeReportHtml(cumulative) {
+// Team-wide Accumulated Report — matches CumulativeReportOutputSchema
+// (src/reasoning/cumulativeSchema.ts): team_overview / engineer_patterns /
+// unassigned_risk / leadership_takeaways / concerning_trends, each its own
+// section so "who's overloaded" etc. is a real reusable list, not prose to
+// parse. See renderPersonCumulativeReportHtml below for the per-person
+// shape, which is genuinely different (no engineer_patterns/unassigned_risk
+// — those are team-level concepts) rather than a subset of this one.
+function renderEngineerPatternGroup(label, className, entries) {
+  return `
+    <div class="engineer-pattern-group ${className}">
+      <h5>${escapeHtml(label)}</h5>
+      <ul>
+        ${
+          entries.length
+            ? entries
+                .map(
+                  (e) => `
+                    <li>
+                      <strong>${escapeHtml(e.name)}</strong>
+                      <div class="reasoning-output">${formatMessage(e.reason)}</div>
+                    </li>
+                  `,
+                )
+                .join("")
+            : "<li>None identified.</li>"
+        }
+      </ul>
+    </div>
+  `;
+}
+
+function renderTeamCumulativeReportHtml(cumulative) {
+  const { team_overview, engineer_patterns, unassigned_risk, overall_assessment, leadership_takeaways } = cumulative;
   return `
     <div class="cumulative-report">
       <div>
         <h4>Summary</h4>
         <div class="reasoning-output">${formatMessage(cumulative.summary)}</div>
+      </div>
+      <div>
+        <h4>Team Overview</h4>
+        <div class="cumulative-overview-grid">
+          <div><h5>Throughput</h5><div class="reasoning-output">${formatMessage(team_overview.throughput)}</div></div>
+          <div><h5>Cycle Time</h5><div class="reasoning-output">${formatMessage(team_overview.cycle_time)}</div></div>
+          <div><h5>Stability</h5><div class="reasoning-output">${formatMessage(team_overview.stability)}</div></div>
+        </div>
+      </div>
+      <div>
+        <h4>Engineer Patterns</h4>
+        ${renderEngineerPatternGroup("Overloaded", "pattern-overloaded", engineer_patterns.overloaded)}
+        ${renderEngineerPatternGroup("Underutilized", "pattern-underutilized", engineer_patterns.underutilized)}
+        ${renderEngineerPatternGroup("Stable Anchors", "pattern-stable", engineer_patterns.stable_anchors)}
+      </div>
+      ${
+        unassigned_risk
+          ? `<div><h4>Unassigned</h4><div class="unassigned-risk-box reasoning-output">${formatMessage(unassigned_risk)}</div></div>`
+          : ""
+      }
+      <div>
+        <h4>What This Means Overall</h4>
+        <div class="reasoning-output overall-assessment">${formatMessage(overall_assessment)}</div>
+      </div>
+      <div>
+        <h4>Leadership Takeaways</h4>
+        <h5>Root Causes</h5>
+        <ul>${leadership_takeaways.root_causes.map((r) => `<li>${formatMessage(r)}</li>`).join("") || "<li>None identified.</li>"}</ul>
+        <h5>Opportunities</h5>
+        <ul>${leadership_takeaways.opportunities.map((r) => `<li>${formatMessage(r)}</li>`).join("") || "<li>None identified.</li>"}</ul>
+      </div>
+      <div>
+        <h4>Concerning Trends</h4>
+        <ul class="concerning-trends">${cumulative.concerning_trends.map((t) => `<li>${formatMessage(t)}</li>`).join("") || "<li>None identified.</li>"}</ul>
+      </div>
+    </div>
+  `;
+}
+
+// Per-person cumulative report — matches PersonCumulativeReportOutputSchema:
+// trajectory_overview / pattern (a single classification, since there's no
+// "compared to whom" for one person's own history) / recommendations /
+// concerning_trends. Deliberately a separate render function, not this
+// schema squeezed through renderTeamCumulativeReportHtml, since the two
+// JSON shapes diverge (see cumulativeSchema.ts).
+function renderPersonCumulativeReportHtml(cumulative) {
+  const { trajectory_overview, pattern } = cumulative;
+  return `
+    <div class="cumulative-report">
+      <div>
+        <h4>Summary</h4>
+        <div class="reasoning-output">${formatMessage(cumulative.summary)}</div>
+      </div>
+      <div>
+        <h4>Trajectory Overview</h4>
+        <div class="cumulative-overview-grid">
+          <div><h5>Workload</h5><div class="reasoning-output">${formatMessage(trajectory_overview.workload)}</div></div>
+          <div><h5>Cycle Time</h5><div class="reasoning-output">${formatMessage(trajectory_overview.cycle_time)}</div></div>
+          <div><h5>Stability</h5><div class="reasoning-output">${formatMessage(trajectory_overview.stability)}</div></div>
+        </div>
+      </div>
+      <div>
+        <h4>Pattern <span class="pattern-badge ${escapeHtml(pattern.classification)}">${escapeHtml(pattern.classification)}</span></h4>
+        <div class="reasoning-output">${formatMessage(pattern.reason)}</div>
       </div>
       <div>
         <h4>Recommendations</h4>
@@ -737,14 +918,24 @@ function renderHistoryTrend(trend) {
     .flatMap((e) => {
       // "Unassigned" is a backlog bucket, not a person — no individual
       // trajectory to report on (the server rejects it too; this just
-      // avoids offering a button that would only ever error).
+      // avoids offering a button that would only ever error), and no
+      // role/weight either (it has neither).
       const canReport = e.name !== "Unassigned";
+      // Role/weight here come from the LATEST point, not the first — both
+      // are already live-corrected against the current roster as of each
+      // point's own date (see overlayCurrentRosterFacts), so with the
+      // standard epoch-backdated roster save every point shows the same
+      // current value anyway; the latest one is the closest to "current"
+      // in the one case that's not true (a genuine role/weight change with
+      // its own later effective_from date).
+      const latest = e.points[e.points.length - 1];
       const nameCell = `
         <td rowspan="${e.deltas.length}">
           ${escapeHtml(e.name)}
           ${
             canReport
-              ? `<button type="button" class="person-report-btn" data-engineer="${escapeHtml(e.name)}">Generate Report</button>
+              ? `<div class="person-meta">${escapeHtml(latest.role || "no role set")} · weight ${latest.weight}</div>
+                 <button type="button" class="person-report-btn" data-engineer="${escapeHtml(e.name)}">Generate Report</button>
                  <p class="person-report-status" data-engineer="${escapeHtml(e.name)}"></p>`
               : ""
           }
@@ -767,7 +958,7 @@ function renderHistoryTrend(trend) {
           <tr>
             <td colspan="5" class="person-report-result">
               <strong>Accumulated report for ${escapeHtml(e.name)}</strong>
-              ${renderCumulativeReportHtml(result)}
+              ${renderPersonCumulativeReportHtml(result)}
             </td>
           </tr>
         `);
@@ -843,9 +1034,9 @@ historySprintFilter.addEventListener("change", loadHistory);
 
 // Delegated onto the stable wrapper (innerHTML replaced on every render,
 // the element itself isn't) — same pattern as history-snapshots-wrap's
-// delete button. Reuses the Accumulated Report form's provider/URL/model/
-// context fields rather than giving every engineer their own picker, since
-// it's the same underlying reasoning call just scoped to one person.
+// delete button. Uses the app-wide reasoning settings (see getReasoningSettings)
+// rather than a picker of its own — same underlying reasoning call as the
+// Accumulated Report, just scoped to one person.
 document.getElementById("history-trend-wrap").addEventListener("click", async (event) => {
   const btn = event.target.closest(".person-report-btn");
   if (!btn) return;
@@ -861,6 +1052,7 @@ document.getElementById("history-trend-wrap").addEventListener("click", async (e
   }
 
   try {
+    const { provider, url, model } = getReasoningSettings();
     const response = await fetch("/api/trend-reason-person", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -868,9 +1060,9 @@ document.getElementById("history-trend-wrap").addEventListener("click", async (e
         team,
         sprint: sprint || undefined,
         engineerName,
-        provider: cumulativeProvider.value,
-        url: cumulativeUrl.value,
-        model: cumulativeModel.value || undefined,
+        provider,
+        url,
+        model: model || undefined,
         context: document.getElementById("cumulativeContext").value || undefined,
       }),
     });
@@ -891,34 +1083,6 @@ document.getElementById("history-trend-wrap").addEventListener("click", async (e
   }
 });
 
-function updateCumulativeFields() {
-  cumulativeUrlField.hidden = cumulativeProvider.value !== "ollama";
-}
-
-async function refreshCumulativeModels() {
-  cumulativeModel.innerHTML = `<option value="">Loading…</option>`;
-  try {
-    const params = new URLSearchParams({ provider: cumulativeProvider.value, url: cumulativeUrl.value });
-    const response = await fetch(`/api/models?${params}`);
-    const body = await response.json();
-    if (!response.ok) throw new Error(body.error || "failed to list models");
-    cumulativeModel.innerHTML = body.models.length
-      ? body.models.map((name) => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join("")
-      : `<option value="">No models found</option>`;
-  } catch (error) {
-    cumulativeModel.innerHTML = `<option value="">Could not load models</option>`;
-  }
-}
-
-cumulativeProvider.addEventListener("change", () => {
-  updateCumulativeFields();
-  refreshCumulativeModels();
-});
-cumulativeUrl.addEventListener("change", refreshCumulativeModels);
-document.getElementById("refreshCumulativeModels").addEventListener("click", refreshCumulativeModels);
-updateCumulativeFields();
-refreshCumulativeModels();
-
 document.getElementById("cumulative-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const team = historyTeamSelect.value;
@@ -934,15 +1098,16 @@ document.getElementById("cumulative-form").addEventListener("submit", async (eve
 
   try {
     const sprint = historySprintFilter.value.trim();
+    const { provider, url, model } = getReasoningSettings();
     const response = await fetch("/api/trend-reason", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         team,
         sprint: sprint || undefined,
-        provider: cumulativeProvider.value,
-        url: cumulativeUrl.value,
-        model: cumulativeModel.value || undefined,
+        provider,
+        url,
+        model: model || undefined,
         context: document.getElementById("cumulativeContext").value || undefined,
       }),
     });
@@ -950,7 +1115,7 @@ document.getElementById("cumulative-form").addEventListener("submit", async (eve
     if (!response.ok) throw new Error(body.error || "request failed");
 
     const { cumulative } = body;
-    document.getElementById("cumulative-result-wrap").innerHTML = renderCumulativeReportHtml(cumulative);
+    document.getElementById("cumulative-result-wrap").innerHTML = renderTeamCumulativeReportHtml(cumulative);
     cumulativeStatusEl.textContent = "Accumulated report generated.";
   } catch (error) {
     cumulativeStatusEl.textContent = error.message;
@@ -959,38 +1124,6 @@ document.getElementById("cumulative-form").addEventListener("submit", async (eve
 });
 
 loadTeams();
-
-function updateReasonFields() {
-  reasonUrlField.hidden = reasonProvider.value !== "ollama";
-}
-
-async function refreshModels() {
-  reasonModelSelect.innerHTML = `<option value="">Loading…</option>`;
-  try {
-    const params = new URLSearchParams({ provider: reasonProvider.value, url: reasonUrlInput.value });
-    const response = await fetch(`/api/models?${params}`);
-    const body = await response.json();
-    if (!response.ok) throw new Error(body.error || "failed to list models");
-
-    reasonModelSelect.innerHTML = body.models.length
-      ? body.models.map((name) => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join("")
-      : `<option value="">No models found</option>`;
-  } catch (error) {
-    reasonModelSelect.innerHTML = `<option value="">Could not load models</option>`;
-    reasonStatusEl.textContent = error.message;
-    reasonStatusEl.classList.add("error");
-  }
-}
-
-reasonProvider.addEventListener("change", () => {
-  updateReasonFields();
-  refreshModels();
-});
-reasonUrlInput.addEventListener("change", refreshModels);
-refreshModelsBtn.addEventListener("click", refreshModels);
-
-updateReasonFields();
-refreshModels();
 
 function updateMode() {
   const multi = multiTeamToggle.checked;
@@ -1515,14 +1648,15 @@ reasonForm.addEventListener("submit", async (event) => {
   reasonStatusEl.textContent = "Generating recommendations…";
 
   try {
+    const { provider, url, model } = getReasoningSettings();
     const response = await fetch("/api/reason", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         payload: currentPayload,
-        provider: reasonProvider.value,
-        url: reasonUrlInput.value,
-        model: reasonModelSelect.value || undefined,
+        provider,
+        url,
+        model: model || undefined,
         context: document.getElementById("reasonContext").value || undefined,
         // When set, the server auto-enriches with charter/sprint-position/
         // roster notes/sprint goal/blocked-by/PTO/on-call from the DB — the

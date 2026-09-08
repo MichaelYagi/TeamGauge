@@ -111,7 +111,21 @@ export function buildPrompt(report: TeamReport, ctx: ReasoningContext = {}): str
     'Never suggest redistribution in the abstract. "Redistribute high-priority tasks to engineers with lower cycle times" is not acceptable — it makes the reader do the lookup you already have the data to do. Name exactly who: "redistribute some of X\'s load to Y (Y is at weight 0.8 with load_score Z, below the team average)." Every redistribution claim in any field, including free-text notes, must resolve to specific named people, not a category description.',
     '"redistribute_to" must only name other engineers listed in this same team\'s data — never invent a name, never reference another team, and never name "Unassigned" as a source or target per the rule above.',
     'An empty role ("") means the role is unknown; do not guess a title.',
-    "team_recommendations.notes must be several sentences of genuine analysis grounded in team_metrics and cross-engineer comparison — not a single generic sentence.",
+
+    // The canonical TeamReport schema (claude.md) fixes team_recommendations
+    // to exactly {redistribute_work, sprint_feasibility, notes} — no new top-
+    // level fields, since this object is saved back into a snapshot's
+    // report_json verbatim. So the richer, sectioned analysis a manager
+    // actually wants (the same depth as the multi-sprint Accumulated Report,
+    // just scoped to this one sprint) has to live INSIDE notes as
+    // structured markdown, not as new JSON keys. Spelling out the exact
+    // section headings (rather than just "write more") is the same fix
+    // already applied above for engineer_recommendations completeness —
+    // a vague instruction under-specifies what a smaller model actually
+    // produces.
+    "team_recommendations.notes must be a structured write-up using these exact markdown section headings, in this order, each with 1-3 sentences: \"## Throughput\" (this sprint's velocity/resolved count against team_metrics and, if a sprint goal was stated, against that commitment specifically — not just raw numbers), \"## Cycle Time\" (whether team_avg_cycle_time_hours reads healthy or concerning, and why), \"## Who Needs Attention\" (name the specific engineers who read as overloaded or underutilized THIS sprint, each with the one comparison that shows it — omit anyone with nothing notable, it's fine for this section to name only one or two people or none at all), and \"## Leadership Actions\" (2-3 concrete, named next steps). Add a \"## Unassigned\" section, in the same position, only if \"Unassigned\" appears in engineers — frame it as backlog health (size/growth relative to team_velocity), never as a person's workload, per the rule above. Every section still follows the one-idea-per-sentence, no-data-dump rule above — a heading does not license cramming in every statistic under it.",
+    "team_recommendations.notes MUST follow this exact skeleton — copy the literal \"## \" heading lines verbatim and write your own sentences in place of the bracketed placeholders, do not submit a plain paragraph with no headings at all:\n\"## Throughput\\n[1-3 sentences on velocity/resolved vs. team_metrics and, if given, the sprint goal]\\n\\n## Cycle Time\\n[1-3 sentences on whether team_avg_cycle_time_hours is healthy or concerning, and why]\\n\\n## Who Needs Attention\\n[name specific engineers who read as overloaded or underutilized this sprint, each with one grounded comparison]\\n\\n## Leadership Actions\\n[2-3 concrete, named next steps]\"\nA response missing any of these four headings is incomplete, even if the sentences themselves are accurate.",
+    "Each per-engineer notes field should also name which of overloaded / underutilized / stable this person reads as THIS sprint, as its first sentence, followed by the grounded comparison that shows it — still several sentences total, still one idea per sentence, never a bare label with no reasoning.",
 
     "Data:",
     JSON.stringify(dataForModel, null, 2),

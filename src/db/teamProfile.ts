@@ -1,6 +1,7 @@
 import { getDb } from "./connection.js";
 import type { TeamReport } from "../schema/canonical.js";
-import type { TeamTrend } from "../normalization/trend.js";
+import type { EngineerMetricPoint, TeamTrend } from "../normalization/trend.js";
+import { deriveMetrics } from "../normalization/deriveMetrics.js";
 
 export interface TeamProfile {
   name: string;
@@ -119,12 +120,62 @@ export function currentRoleAsOf(teamName: string, engineerName: string, asOfDate
   return row?.role || fallback;
 }
 
-export function overlayCurrentRoles(teamName: string, trend: TeamTrend, dbPath?: string): TeamTrend {
+// Same point-in-time idea as currentRoleAsOf, for weight — but weight can't
+// be relabeled in isolation the way role can: load_score is computed as
+// rawLoadScore * weight (see deriveMetrics), so overlaying a corrected
+// weight number without also recomputing load_score/burnout_risk to match
+// would leave a snapshot showing a weight that doesn't agree with the
+// load_score sitting right next to it. This was a real, caught gap — a
+// first version of the weight fix only relabeled the frozen weight field,
+// which a live check against a real team immediately proved didn't work
+// (the roster showed corrected weights of 3-4, but every saved snapshot's
+// weight still read 1, because relabeling never touched the underlying
+// snapshot's derived_metrics at all). null return means "no roster entry
+// covers this date" — the caller keeps the frozen weight/load_score as-is.
+function currentWeightAsOf(teamName: string, engineerName: string, asOfDate: string, dbPath?: string): number | null {
+  const row = getRosterAsOf(teamName, asOfDate, dbPath).find((r) => r.engineer_name === engineerName);
+  return row?.weight ?? null;
+}
+
+// Recomputes weight/load_score/burnout_risk together from a point's own
+// immutable signals (see EngineerMetricPoint.signals) using the CURRENT
+// roster weight as of that point's date, via the same deriveMetrics used at
+// analyze time — never just relabeling weight, which would desync it from
+// load_score. Falls back to the frozen values whenever no roster entry
+// covers this date, so a correction is additive (can only replace 1/1 with
+// a real number), never destructive.
+function recomputeWeightedMetrics(
+  teamName: string,
+  engineerName: string,
+  asOfDate: string,
+  point: Pick<EngineerMetricPoint, "signals" | "weight" | "load_score" | "burnout_risk" | "resolved_count" | "velocity">,
+  dbPath?: string,
+): Pick<EngineerMetricPoint, "weight" | "load_score" | "burnout_risk"> {
+  const currentWeight = currentWeightAsOf(teamName, engineerName, asOfDate, dbPath);
+  if (currentWeight === null) return { weight: point.weight, load_score: point.load_score, burnout_risk: point.burnout_risk };
+  const recomputed = deriveMetrics(point.signals, currentWeight, point.resolved_count, point.velocity);
+  return { weight: recomputed.weight, load_score: recomputed.load_score, burnout_risk: recomputed.burnout_risk };
+}
+
+// Overlays BOTH role and weight-dependent metrics (load_score/burnout_risk
+// recomputed to stay consistent with the corrected weight) onto a computed
+// TeamTrend — see currentRoleAsOf/recomputeWeightedMetrics above for why
+// each needs different treatment. Used by every read path that shows a
+// saved team's trend for display or reasoning (history, trend, and
+// cumulative/person reasoning prompts, in both the server and the CLI) so
+// a roster correction applies retroactively the way the UI's own "applies
+// to every sprint for this team, past and future" message promises,
+// without ever re-analyzing or rewriting the underlying saved snapshot.
+export function overlayCurrentRosterFacts(teamName: string, trend: TeamTrend, dbPath?: string): TeamTrend {
   return {
     ...trend,
     engineers: trend.engineers.map((e) => ({
       ...e,
-      points: e.points.map((p) => ({ ...p, role: currentRoleAsOf(teamName, e.name, p.snapshot_date, p.role, dbPath) })),
+      points: e.points.map((p) => ({
+        ...p,
+        role: currentRoleAsOf(teamName, e.name, p.snapshot_date, p.role, dbPath),
+        ...recomputeWeightedMetrics(teamName, e.name, p.snapshot_date, p, dbPath),
+      })),
     })),
   };
 }
@@ -132,11 +183,22 @@ export function overlayCurrentRoles(teamName: string, trend: TeamTrend, dbPath?:
 // Same overlay, but for a single full TeamReport rather than a trend — used
 // right before handing a saved snapshot's report to reasonAboutReport, so
 // the model sees each person's actual discipline (e.g. QA vs. software
-// engineer) instead of an empty role frozen in from before the roster was
-// filled out.
-export function overlayCurrentRolesOnReport(teamName: string, asOfDate: string, report: TeamReport, dbPath?: string): TeamReport {
+// engineer) and a load_score consistent with their corrected weight,
+// instead of stale values frozen in from before the roster was filled out.
+export function overlayCurrentRosterFactsOnReport(teamName: string, asOfDate: string, report: TeamReport, dbPath?: string): TeamReport {
   return {
     ...report,
-    engineers: report.engineers.map((e) => ({ ...e, role: currentRoleAsOf(teamName, e.name, asOfDate, e.role, dbPath) })),
+    engineers: report.engineers.map((e) => {
+      const currentWeight = currentWeightAsOf(teamName, e.name, asOfDate, dbPath);
+      const derived =
+        currentWeight === null
+          ? e.derived_metrics
+          : deriveMetrics(e.signals, currentWeight, e.derived_metrics.resolved_count, e.derived_metrics.velocity);
+      return {
+        ...e,
+        role: currentRoleAsOf(teamName, e.name, asOfDate, e.role, dbPath),
+        derived_metrics: derived,
+      };
+    }),
   };
 }

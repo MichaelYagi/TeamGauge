@@ -46,7 +46,7 @@ export const RECOMMENDATIONS_JSON_SCHEMA = {
             items: { type: "string" },
             description: "Short list of specific work categories/types to cut or defer for this person — brief phrases, not full sentences (put the reasoning in notes instead).",
           },
-          notes: { type: "string", description: "The full analysis and reasoning for this person, several sentences, grounded in the data — this is where explanations belong, not in the arrays above." },
+          notes: { type: "string", description: "Several sentences of full analysis for this person, grounded in the data — this is where explanations belong, not in the arrays above. The FIRST sentence must state whether this person reads as overloaded, underutilized, or stable THIS sprint, followed by the specific grounded comparison that shows it." },
         },
         required: ["name", "redistribute_to", "reduce_scope", "notes"],
         additionalProperties: false,
@@ -61,7 +61,11 @@ export const RECOMMENDATIONS_JSON_SCHEMA = {
           description: "Short list of engineer NAMES ONLY who are overloaded and need relief — no explanation here, just names (put the reasoning in notes instead).",
         },
         sprint_feasibility: { type: "string", description: "A short phrase or label, e.g. \"on track\", \"at risk\", \"unlikely\" — not a paragraph." },
-        notes: { type: "string", description: "The full team-wide analysis, several sentences, grounded in team_metrics and named cross-engineer comparisons — this is where explanations belong, not in the arrays above." },
+        notes: {
+          type: "string",
+          description:
+            'REQUIRED to be a structured write-up using these EXACT markdown section headings, in this order, each with 1-3 sentences: "## Throughput" (this sprint\'s velocity/resolved count against team_metrics, and against the stated sprint goal if one was given), "## Cycle Time" (whether team_avg_cycle_time_hours reads healthy or concerning, and why), "## Who Needs Attention" (name the specific engineers who read as overloaded or underutilized THIS sprint, each with the one comparison that shows it), and "## Leadership Actions" (2-3 concrete, named next steps). Add a "## Unassigned" section, in the same position, only if "Unassigned" appears among engineers. This is NOT a few plain sentences — a response with no markdown headings at all does not satisfy this field.',
+        },
       },
       required: ["redistribute_work", "sprint_feasibility", "notes"],
       additionalProperties: false,

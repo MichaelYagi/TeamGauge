@@ -225,24 +225,23 @@ input[type="checkbox"] {
 }
 
 #team-meta-fields,
-#reason-fields,
 #history-controls,
-#cumulative-fields {
+#settings-fields {
   display: flex;
   flex-wrap: wrap;
   gap: 1rem;
 }
 
 #team-meta-fields label,
-#reason-fields label,
 #history-controls label,
-#cumulative-fields label {
+#settings-fields label {
   flex: 1;
   min-width: 200px;
 }
 
 #reason-form,
-#cumulative-form {
+#cumulative-form,
+#settings-form {
   display: flex;
   flex-direction: column;
   gap: 1rem;
@@ -302,6 +301,8 @@ input[type="checkbox"] {
 #history-status,
 #cumulative-status,
 #reason-status,
+#sprint-report-status,
+#settings-status,
 .card-save-status,
 .sprint-context-status,
 .roster-row-status {
@@ -318,6 +319,8 @@ input[type="checkbox"] {
 #history-status.error,
 #cumulative-status.error,
 #reason-status.error,
+#sprint-report-status.error,
+#settings-status.error,
 .card-save-status.error,
 .sprint-context-status.error,
 .roster-row-status.error {
@@ -328,12 +331,24 @@ input[type="checkbox"] {
 .roster-weight-input,
 .roster-notes-input {
   width: 100%;
-  min-width: 6rem;
+  min-width: 4rem;
   font-size: 0.9rem;
 }
 
 .roster-weight-input {
-  min-width: 4.5rem;
+  min-width: 3rem;
+}
+
+/* Scoped to this one table, not .metrics-table generally — the Snapshots
+   and Trend tables are plain text and have room to spare; this one gained
+   three live inputs plus a two-button actions column when it became
+   editable, which pushed it past the panel width (and into a horizontal
+   scrollbar) around common half-monitor/laptop widths (~900px and below).
+   Tighter padding alone (combined with the reduced input min-widths above)
+   closes that gap without touching the density of any other table. */
+#roster-table-wrap .metrics-table th,
+#roster-table-wrap .metrics-table td {
+  padding: 0.55rem 0.5rem;
 }
 
 .roster-table-actions {
@@ -714,6 +729,119 @@ button:hover {
 
 .concerning-trends li {
   color: var(--risk-medium);
+}
+
+/* ---- Cumulative report sections (team_overview / engineer_patterns /
+   leadership_takeaways) — team-wide and per-person cumulative reports
+   share this look even though their underlying JSON shape now differs. ---- */
+
+.cumulative-overview-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 0.9rem;
+}
+
+.cumulative-overview-grid h5 {
+  margin: 0 0 0.3rem;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--muted);
+}
+
+.engineer-pattern-group {
+  margin-bottom: 0.9rem;
+}
+
+.engineer-pattern-group:last-child {
+  margin-bottom: 0;
+}
+
+.engineer-pattern-group h5 {
+  display: inline-block;
+  margin: 0 0 0.4rem;
+  padding: 0.15rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.pattern-overloaded h5,
+.pattern-badge.overloaded,
+.pattern-badge.declining {
+  background: var(--risk-high-soft);
+  color: var(--risk-high);
+}
+
+.pattern-underutilized h5,
+.pattern-badge.underutilized {
+  background: var(--risk-medium-soft);
+  color: var(--risk-medium);
+}
+
+.pattern-stable h5,
+.pattern-badge.stable,
+.pattern-badge.improving {
+  background: var(--risk-low-soft);
+  color: var(--risk-low);
+}
+
+.pattern-badge.volatile {
+  background: var(--risk-medium-soft);
+  color: var(--risk-medium);
+}
+
+.pattern-badge {
+  display: inline-block;
+  padding: 0.15rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-transform: capitalize;
+  margin-left: 0.4rem;
+}
+
+.engineer-pattern-group ul {
+  margin-top: 0;
+}
+
+.engineer-pattern-group li strong {
+  display: block;
+}
+
+.unassigned-risk-box {
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 0.75rem 1rem;
+}
+
+/* "What This Means Overall" — the longest, most structured field in the
+   cumulative report (headings/bullets throughout), so it gets a visually
+   distinct panel rather than blending into the shorter prose sections
+   around it. */
+.overall-assessment {
+  background: var(--panel-2);
+  border-radius: var(--radius-sm);
+  padding: 1rem 1.25rem;
+}
+
+.reasoning-output ul {
+  margin: 0.4rem 0;
+  padding-left: 1.25rem;
+}
+
+.reasoning-output li {
+  margin-bottom: 0.3rem;
+}
+
+/* Current role/weight shown under each engineer's name in the History &
+   Trends Per Engineer table (see renderHistoryTrend) — small and muted
+   since it's context for the deltas beside it, not the main content of
+   the row. */
+.person-meta {
+  font-size: 0.78rem;
+  color: var(--muted);
+  margin-top: 0.2rem;
 }
 
 /* Per-engineer "Generate Report" trigger in the History & Trends Per

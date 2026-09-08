@@ -19,7 +19,7 @@ import { ClaudeReasoningProvider } from "../reasoning/providers/claude.js";
 import type { ReasoningContext, ReasoningProvider } from "../reasoning/types.js";
 import { listOllamaModels, listClaudeModels } from "../reasoning/listModels.js";
 import { runSetup } from "./setup.js";
-import { createOrUpdateTeam, getTeam, listTeams, addRosterEntry, getRosterAsOf, getDepartedAsOf, markDeparted, overlayCurrentRoles, overlayCurrentRolesOnReport } from "../db/teamProfile.js";
+import { createOrUpdateTeam, getTeam, listTeams, addRosterEntry, getRosterAsOf, getDepartedAsOf, markDeparted, overlayCurrentRosterFacts, overlayCurrentRosterFactsOnReport } from "../db/teamProfile.js";
 import {
   saveSnapshot,
   listSnapshots,
@@ -343,7 +343,7 @@ program
 
         const snapshot = resolveSnapshotOrFail(opts.team, opts.sprint, opts.snapshotDate, opts.db);
 
-        const report = overlayCurrentRolesOnReport(opts.team, snapshot.snapshot_date, TeamReportSchema.parse(JSON.parse(snapshot.report_json)), opts.db);
+        const report = overlayCurrentRosterFactsOnReport(opts.team, snapshot.snapshot_date, TeamReportSchema.parse(JSON.parse(snapshot.report_json)), opts.db);
         const profile = getTeam(opts.team, opts.db);
         const rosterRows = getRosterAsOf(opts.team, snapshot.snapshot_date, opts.db);
         const engineerNotes = Object.fromEntries(
@@ -644,7 +644,7 @@ program
         sprint: row.sprint,
         report: TeamReportSchema.parse(JSON.parse(row.report_json)),
       }));
-      const trend = overlayCurrentRoles(opts.team, computeTrend(points), opts.db);
+      const trend = overlayCurrentRosterFacts(opts.team, computeTrend(points), opts.db);
 
       if (!opts.reason) return printJson(trend);
 

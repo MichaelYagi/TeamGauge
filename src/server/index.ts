@@ -23,7 +23,7 @@ import { localToday } from "../util/date.js";
 import { MultiTeamConfigSchema } from "../schema/config.js";
 import { RosterSchema, type Roster } from "../schema/roster.js";
 import { withTempFile, createTempFile } from "./tempFile.js";
-import { createOrUpdateTeam, getTeam, listTeams, addRosterEntry, getRosterAsOf, getDepartedAsOf, markDeparted, currentRoleAsOf, overlayCurrentRoles, overlayCurrentRolesOnReport } from "../db/teamProfile.js";
+import { createOrUpdateTeam, getTeam, listTeams, addRosterEntry, getRosterAsOf, getDepartedAsOf, markDeparted, currentRoleAsOf, overlayCurrentRosterFacts, overlayCurrentRosterFactsOnReport } from "../db/teamProfile.js";
 import {
   saveSnapshot,
   findSnapshotByDate,
@@ -585,7 +585,7 @@ app.post("/api/reason", async (req, res) => {
       const snapshot = parsed.snapshotDate ? rows.find((row) => row.snapshot_date === parsed.snapshotDate) : rows.at(-1);
       if (snapshot) {
         dbCtx = buildDbContextForSnapshot(parsed.team, snapshot);
-        reportsToReason = reportsToReason.map((report) => overlayCurrentRolesOnReport(parsed.team!, snapshot.snapshot_date, report));
+        reportsToReason = reportsToReason.map((report) => overlayCurrentRosterFactsOnReport(parsed.team!, snapshot.snapshot_date, report));
       }
     }
 
@@ -662,7 +662,7 @@ app.get("/api/trend", (req, res) => {
     sprint: row.sprint,
     report: TeamReportSchema.parse(JSON.parse(row.report_json)),
   }));
-  res.json(overlayCurrentRoles(team, computeTrend(points)));
+  res.json(overlayCurrentRosterFacts(team, computeTrend(points)));
 });
 
 const TrendReasonRequestSchema = z.object({
@@ -692,7 +692,7 @@ app.post("/api/trend-reason", async (req, res) => {
       sprint: row.sprint,
       report: TeamReportSchema.parse(JSON.parse(row.report_json)),
     }));
-    const trend = overlayCurrentRoles(parsed.team, computeTrend(points));
+    const trend = overlayCurrentRosterFacts(parsed.team, computeTrend(points));
 
     const provider = resolveReasoningProvider(parsed);
 
@@ -735,7 +735,7 @@ app.post("/api/trend-reason-person", async (req, res) => {
       sprint: row.sprint,
       report: TeamReportSchema.parse(JSON.parse(row.report_json)),
     }));
-    const trend = overlayCurrentRoles(parsed.team, computeTrend(points));
+    const trend = overlayCurrentRosterFacts(parsed.team, computeTrend(points));
     const personTrend = trend.engineers.find((e) => e.name === parsed.engineerName);
     if (!personTrend) throw new Error(`"${parsed.engineerName}" doesn't appear in any saved snapshot for "${parsed.team}"${parsed.sprint ? ` sprint "${parsed.sprint}"` : ""}`);
 
@@ -770,7 +770,7 @@ app.post("/api/snapshot-reason", async (req, res) => {
   try {
     const parsed = SnapshotReasonRequestSchema.parse(req.body);
     const snapshot = resolveSnapshotOrThrow(parsed.team, parsed.sprint, parsed.snapshotDate);
-    const report = overlayCurrentRolesOnReport(parsed.team, snapshot.snapshot_date, TeamReportSchema.parse(JSON.parse(snapshot.report_json)));
+    const report = overlayCurrentRosterFactsOnReport(parsed.team, snapshot.snapshot_date, TeamReportSchema.parse(JSON.parse(snapshot.report_json)));
 
     const provider = resolveReasoningProvider(parsed);
     const dbCtx = buildDbContextForSnapshot(parsed.team, snapshot);
